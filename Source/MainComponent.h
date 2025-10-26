@@ -25,13 +25,20 @@ public:
 private:
     // ===== Synth state =====
     float   phase = 0.0f;
-    float   phaseDelta = 0.0f;
-    float   frequency = 220.0f;
+    float   targetFrequency = 220.0f;
 
     // LFO (vibrato)
     float   lfoPhase = 0.0f;
     float   lfoRateHz = 5.0f;
     float   lfoDepth = 0.03f;
+
+    // Smoothed parameters for a more polished response
+    juce::SmoothedValue<float> frequencySmoothed;
+    juce::SmoothedValue<float> gainSmoothed;
+    juce::SmoothedValue<float> cutoffSmoothed;
+    juce::SmoothedValue<float> resonanceSmoothed;
+    juce::SmoothedValue<float> stereoWidthSmoothed;
+    juce::SmoothedValue<float> lfoDepthSmoothed;
 
     // Output Gain
     float   outputGain = 0.5f;
@@ -102,7 +109,8 @@ private:
     void configureCaptionLabel(juce::Label& label, const juce::String& text);
     void configureValueLabel(juce::Label& label);
 
-    void updatePhaseDelta();
+    void resetSmoothers(double sampleRate);
+    void setTargetFrequency(float newFrequency, bool force = false);
     void updateFilterCoeffs(double cutoff, double Q);
     void updateFilterStatic();
     inline float renderMorphSample(float ph, float morph) const;
