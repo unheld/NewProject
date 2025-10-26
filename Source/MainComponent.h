@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include <juce_dsp/juce_dsp.h>
+#include <limits>
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -10,7 +12,7 @@ public:
     MainComponent();
     ~MainComponent() override;
 
-    void prepareToPlay(int, double) override;
+    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo&) override;
     void releaseResources() override;
 
@@ -46,7 +48,10 @@ private:
     // Filter (cutoff + resonance + per-channel IIR)
     float   cutoffHz = 1000.0f;
     float   resonanceQ = 0.707f;
-    juce::IIRFilter filterL, filterR;
+    juce::dsp::StateVariableTPTFilter<float> filterL, filterR;
+    float lastFilterCutoff = std::numeric_limits<float>::quiet_NaN();
+    float lastFilterResonance = std::numeric_limits<float>::quiet_NaN();
+    bool filterDirty = true;
 
     float   lfoCutModAmt = 0.0f;
 
@@ -61,8 +66,6 @@ private:
     // Stereo width
     float   stereoWidth = 1.0f;
 
-    int filterUpdateStep = 16;
-    int filterUpdateCount = 0;
     double currentSR = 44100.0;
 
     float waveMorph = 0.0f;
@@ -116,8 +119,7 @@ private:
     void resetSmoothers(double sampleRate);
     void setTargetFrequency(float newFrequency, bool force = false);
     void updateEnvelopeParameters();
-    void updateFilterCoeffs(double cutoff, double Q);
-    void updateFilterStatic();
+    void updateFilterState();
     inline float renderMorphSample(float ph, float morph) const;
     int findZeroCrossingIndex(int searchSpan) const;
     void timerCallback() override;

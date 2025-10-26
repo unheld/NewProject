@@ -50,47 +50,55 @@ MainComponent::~MainComponent()
 }
 
 //==============================================================================
-void MainComponent::prepareToPlay(int, double sampleRate)
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     currentSR = sampleRate;
     phase = 0.0f;
     lfoPhase = 0.0f;
     scopeWritePos = 0;
-    filterUpdateCount = 0;
     envelope.setSampleRate(sampleRate);
     updateEnvelopeParameters();
     envelope.reset();
     resetSmoothers(sampleRate);
-    updateFilterStatic();
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = static_cast<juce::uint32>(samplesPerBlockExpected > 0 ? samplesPerBlockExpected : 512);
+    spec.numChannels = 1;
+
+    filterL.reset();
+    filterR.reset();
+    filterL.prepare(spec);
+    filterR.prepare(spec);
+    filterL.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
+    filterR.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
+
+    lastFilterCutoff = std::numeric_limits<float>::quiet_NaN();
+    lastFilterResonance = std::numeric_limits<float>::quiet_NaN();
+    filterDirty = true;
+    updateFilterState();
 }
 
-void MainComponent::updateFilterCoeffs(double cutoff, double Q)
+void MainComponent::updateFilterState()
 {
-    cutoff = juce::jlimit(20.0, 20000.0, cutoff);
-    Q = juce::jlimit(0.1, 12.0, Q);
+    const float cutoff = juce::jlimit(20.0f, 20000.0f, cutoffHz);
+    const float resonance = juce::jlimit(0.1f, 12.0f, resonanceQ);
 
-    const double w0 = juce::MathConstants<double>::twoPi * cutoff / currentSR;
-    const double cw = std::cos(w0);
-    const double sw = std::sin(w0);
-    const double alpha = sw / (2.0 * Q);
+    if (filterDirty || std::isnan(lastFilterCutoff) || std::abs(cutoff - lastFilterCutoff) > 1.0e-3f)
+    {
+        filterL.setCutoffFrequency(cutoff);
+        filterR.setCutoffFrequency(cutoff);
+        lastFilterCutoff = cutoff;
+    }
 
-    double b0 = (1.0 - cw) * 0.5;
-    double b1 = 1.0 - cw;
-    double b2 = (1.0 - cw) * 0.5;
-    double a0 = 1.0 + alpha;
-    double a1 = -2.0 * cw;
-    double a2 = 1.0 - alpha;
+    if (filterDirty || std::isnan(lastFilterResonance) || std::abs(resonance - lastFilterResonance) > 1.0e-3f)
+    {
+        filterL.setResonance(resonance);
+        filterR.setResonance(resonance);
+        lastFilterResonance = resonance;
+    }
 
-    juce::IIRCoefficients c(b0 / a0, b1 / a0, b2 / a0,
-        1.0, a1 / a0, a2 / a0);
-
-    filterL.setCoefficients(c);
-    filterR.setCoefficients(c);
-}
-
-void MainComponent::updateFilterStatic()
-{
-    updateFilterCoeffs(cutoffHz, resonanceQ);
+    filterDirty = false;
 }
 
 void MainComponent::resetSmoothers(double sampleRate)
@@ -115,6 +123,9 @@ void MainComponent::resetSmoothers(double sampleRate)
 
     filterL.reset();
     filterR.reset();
+    lastFilterCutoff = std::numeric_limits<float>::quiet_NaN();
+    lastFilterResonance = std::numeric_limits<float>::quiet_NaN();
+    filterDirty = true;
 }
 
 void MainComponent::updateEnvelopeParameters()
@@ -189,16 +200,28 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         const float phaseInc = juce::MathConstants<float>::twoPi * (baseFrequency * vibrato) / (float)currentSR;
         phase += phaseInc;
 
-        if (++filterUpdateCount >= filterUpdateStep)
+        const double modFactor = std::pow(2.0, (double)lfoCutModAmt * (double)lfoS);
+        const float effCut = juce::jlimit(80.0f, 14000.0f, baseCutoff * (float)modFactor);
+        const float effResonance = juce::jlimit(0.1f, 12.0f, baseResonance);
+
+        if (filterDirty || std::isnan(lastFilterCutoff) || std::abs(effCut - lastFilterCutoff) > 1.0e-3f)
         {
-            filterUpdateCount = 0;
-            const double modFactor = std::pow(2.0, (double)lfoCutModAmt * (double)lfoS);
-            const double effCut = juce::jlimit(80.0, 14000.0, (double)baseCutoff * modFactor);
-            updateFilterCoeffs(effCut, (double)baseResonance);
+            filterL.setCutoffFrequency(effCut);
+            filterR.setCutoffFrequency(effCut);
+            lastFilterCutoff = effCut;
         }
 
-        float fL = filterL.processSingleSampleRaw(s);
-        float fR = (r ? filterR.processSingleSampleRaw(s) : fL);
+        if (filterDirty || std::isnan(lastFilterResonance) || std::abs(effResonance - lastFilterResonance) > 1.0e-3f)
+        {
+            filterL.setResonance(effResonance);
+            filterR.setResonance(effResonance);
+            lastFilterResonance = effResonance;
+        }
+
+        filterDirty = false;
+
+        float fL = filterL.processSample(0, s);
+        float fR = (r ? filterR.processSample(0, s) : fL);
 
         const float env = envelope.getNextSample();
         fL *= env;
@@ -218,6 +241,9 @@ void MainComponent::releaseResources()
 {
     filterL.reset();
     filterR.reset();
+    lastFilterCutoff = std::numeric_limits<float>::quiet_NaN();
+    lastFilterResonance = std::numeric_limits<float>::quiet_NaN();
+    filterDirty = true;
     envelope.reset();
 }
 
@@ -273,7 +299,6 @@ void MainComponent::timerCallback()
     repaint();
 }
 
-// ✅ FINAL DEFINITIVE FIX FOR ALL JUCE VERSIONS ✅
 void MainComponent::resized()
 {
     // Enforce survival layout — prevents overlap
@@ -450,7 +475,7 @@ void MainComponent::initialiseSliders()
         cutoffHz = (float)cutoffKnob.getValue();
         cutoffSmoothed.setTargetValue(cutoffHz);
         cutoffValue.setText(juce::String(cutoffHz, 1) + " Hz", juce::dontSendNotification);
-        filterUpdateCount = filterUpdateStep;
+        filterDirty = true;
     };
     cutoffKnob.onValueChange();
 
@@ -467,7 +492,7 @@ void MainComponent::initialiseSliders()
         if (resonanceQ < 0.1f) resonanceQ = 0.1f;
         resonanceSmoothed.setTargetValue(resonanceQ);
         resonanceValue.setText(juce::String(resonanceQ, 2), juce::dontSendNotification);
-        filterUpdateCount = filterUpdateStep;
+        filterDirty = true;
     };
     resonanceKnob.onValueChange();
 
