@@ -51,9 +51,13 @@ private:
     float   lfoCutModAmt = 0.0f;
 
     // Envelope
-    float   attackMs = 5.0f;
-    float   releaseMs = 200.0f;
-    float   envLevel = 0.0f;
+    float   attackMs = 8.0f;
+    float   decayMs = 90.0f;
+    float   sustainLevel = 0.75f;
+    float   releaseMs = 280.0f;
+
+    juce::ADSR amplitudeEnvelope;
+    juce::ADSR::Parameters ampEnvParams;
 
     // Stereo width
     float   stereoWidth = 1.0f;
@@ -67,13 +71,15 @@ private:
     int scopeWritePos = 0;
 
     // ===== UI Controls =====
-    juce::Slider waveKnob, gainKnob, attackKnob, widthKnob;
+    juce::Slider waveKnob, gainKnob, attackKnob, decayKnob, sustainKnob, widthKnob;
     juce::Slider pitchKnob, cutoffKnob, resonanceKnob, releaseKnob;
     juce::Slider lfoKnob, lfoDepthKnob, filterModKnob;
 
     juce::Label waveLabel, waveValue;
     juce::Label gainLabel, gainValue;
     juce::Label attackLabel, attackValue;
+    juce::Label decayLabel, decayValue;
+    juce::Label sustainLabel, sustainValue;
     juce::Label widthLabel, widthValue;
     juce::Label pitchLabel, pitchValue;
     juce::Label cutoffLabel, cutoffValue;
@@ -108,6 +114,7 @@ private:
     void configureRotarySlider(juce::Slider& slider);
     void configureCaptionLabel(juce::Label& label, const juce::String& text);
     void configureValueLabel(juce::Label& label);
+    void updateAmplitudeEnvelope();
 
     void resetSmoothers(double sampleRate);
     void setTargetFrequency(float newFrequency, bool force = false);
