@@ -1,324 +1,294 @@
 #include "MainComponent.h"
+#include <array>
 #include <cmath>
+#include <functional>
+#include <limits>
+#include <tuple>
+
+namespace
+{
+    constexpr int defaultWidth = 960;
+    constexpr int defaultHeight = 600;
+    constexpr int minWidth = 960;
+    constexpr int minHeight = 600;
+    constexpr int headerBarHeight = 36;
+    constexpr int headerMargin = 16;
+    constexpr int audioButtonWidth = 96;
+    constexpr int audioButtonHeight = 28;
+    constexpr int controlStripHeight = 110;
+    constexpr int knobSize = 48;
+    constexpr int keyboardMinHeight = 60;
+    constexpr int scopeTimerHz = 60;
+
+    namespace ParamIDs
+    {
+        constexpr auto wave = "wave";
+        constexpr auto gain = "gain";
+        constexpr auto attack = "attack";
+        constexpr auto width = "width";
+        constexpr auto pitch = "pitch";
+        constexpr auto cutoff = "cutoff";
+        constexpr auto resonance = "resonance";
+        constexpr auto release = "release";
+        constexpr auto lfoRate = "lfoRate";
+        constexpr auto lfoDepth = "lfoDepth";
+        constexpr auto filterMod = "filterMod";
+    }
+}
+
+struct MainComponent::StandaloneProcessor : juce::AudioProcessor
+{
+    StandaloneProcessor()
+        : juce::AudioProcessor(BusesProperties().withOutput("Output", juce::AudioChannelSet::stereo(), true))
+    {
+    }
+
+    //=============================================================================
+    const juce::String getName() const override { return "StandaloneProcessor"; }
+    void prepareToPlay(double, int) override {}
+    void releaseResources() override {}
+
+    bool isBusesLayoutSupported(const BusesLayout& layouts) const override
+    {
+        return layouts.getMainOutputChannelSet() != juce::AudioChannelSet::disabled();
+    }
+
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+    bool hasEditor() const override { return false; }
+    const juce::String getInputChannelName(int) const override { return {}; }
+    const juce::String getOutputChannelName(int channelIndex) const override { return juce::String(channelIndex + 1); }
+    bool isInputChannelStereoPair(int) const override { return true; }
+    bool isOutputChannelStereoPair(int) const override { return true; }
+    bool acceptsMidi() const override { return false; }
+    bool producesMidi() const override { return false; }
+    bool supportsDoublePrecisionProcessing() const override { return false; }
+    double getTailLengthSeconds() const override { return 0.0; }
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram(int) override {}
+    const juce::String getProgramName(int) override { return {}; }
+    void changeProgramName(int, const juce::String&) override {}
+    void getStateInformation(juce::MemoryBlock&) override {}
+    void setStateInformation(const void*, int) override {}
+};
+
+juce::AudioProcessorValueTreeState::ParameterLayout MainComponent::createParameterLayout()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    auto makeFloat = [](const juce::String& id, const juce::String& name,
+                        float min, float max, float defaultValue,
+                        float centre = std::numeric_limits<float>::quiet_NaN())
+    {
+        juce::NormalisableRange<float> range { min, max };
+        if (! std::isnan(centre))
+            range.setSkewForCentre(centre);
+        return std::make_unique<juce::AudioParameterFloat>(id, name, range, defaultValue);
+    };
+
+    params.push_back(makeFloat(ParamIDs::wave, "Wave", 0.0f, 1.0f, 0.0f));
+    params.push_back(makeFloat(ParamIDs::gain, "Gain", 0.0f, 1.0f, 0.5f));
+    params.push_back(makeFloat(ParamIDs::attack, "Attack", 0.0f, 2000.0f, 5.0f, 40.0f));
+    params.push_back(makeFloat(ParamIDs::width, "Width", 0.0f, 2.0f, 1.0f));
+    params.push_back(makeFloat(ParamIDs::pitch, "Pitch", 40.0f, 5000.0f, 220.0f, 440.0f));
+    params.push_back(makeFloat(ParamIDs::cutoff, "Cutoff", 80.0f, 10000.0f, 1000.0f, 1000.0f));
+    params.push_back(makeFloat(ParamIDs::resonance, "Resonance", 0.1f, 10.0f, 0.707f, 0.707f));
+    params.push_back(makeFloat(ParamIDs::release, "Release", 1.0f, 4000.0f, 200.0f, 200.0f));
+    params.push_back(makeFloat(ParamIDs::lfoRate, "LFO Rate", 0.05f, 15.0f, 5.0f));
+    params.push_back(makeFloat(ParamIDs::lfoDepth, "LFO Depth", 0.0f, 1.0f, 0.03f));
+    params.push_back(makeFloat(ParamIDs::filterMod, "Filter Mod", 0.0f, 1.0f, 0.0f));
+
+    return { params.begin(), params.end() };
+}
+
+float MainComponent::midiNoteToFreq(int midiNote)
+{
+    return 440.0f * std::pow(2.0f, (midiNote - 69) / 12.0f);
+}
 
 //==============================================================================
 MainComponent::MainComponent()
+    : processor(std::make_unique<StandaloneProcessor>()),
+      valueTree(*processor, &undoManager, "PARAMETERS", createParameterLayout())
 {
-    setSize(960, 600);
+    boundsConstrainer.setMinimumSize(minWidth, minHeight);
+    boundsConstrainer.setMaximumSize(9999, 9999);
+    setBoundsConstrainer(&boundsConstrainer);
+
+    initialiseParameterPointers();
+
+    oscillator.initialise([this](float phase)
+    {
+        const auto morph = waveParam != nullptr ? waveParam->load() : 0.0f;
+        return renderMorphSample(phase, morph);
+    }, 128);
+
+    lfoOscillator.initialise([](float x) { return std::sin(x); }, 128);
+
     setAudioChannels(0, 2);
+    setSize(defaultWidth, defaultHeight);
 
     scopeBuffer.clear();
 
-    auto styleKnob = [](juce::Slider& s)
-        {
-            s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-            s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-            s.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
-                juce::MathConstants<float>::pi * 2.8f, true);
-        };
+    initialiseUi();
+    initialiseMidiInputs();
+    initialiseKeyboard();
 
-    auto styleLabel = [&](juce::Label& lbl, const juce::String& txt)
-        {
-            lbl.setText(txt, juce::dontSendNotification);
-            lbl.setJustificationType(juce::Justification::centred);
-            lbl.setColour(juce::Label::textColourId, juce::Colours::white);
-            addAndMakeVisible(lbl);
-        };
-
-    auto styleValue = [&](juce::Label& lbl)
-        {
-            lbl.setJustificationType(juce::Justification::centred);
-            lbl.setColour(juce::Label::textColourId, juce::Colours::white);
-            addAndMakeVisible(lbl);
-        };
-
-    styleKnob(waveKnob);
-    waveKnob.setRange(0.0, 1.0);
-    waveKnob.setValue(0.0);
-    addAndMakeVisible(waveKnob);
-    styleLabel(waveLabel, "Waveform");
-    styleValue(waveValue);
-    waveKnob.onValueChange = [this]
-        {
-            waveMorph = (float)waveKnob.getValue();
-            waveValue.setText(juce::String(waveMorph, 2), juce::dontSendNotification);
-        };
-
-    styleKnob(gainKnob);
-    gainKnob.setRange(0.0, 1.0);
-    gainKnob.setValue(outputGain);
-    addAndMakeVisible(gainKnob);
-    styleLabel(gainLabel, "Gain");
-    styleValue(gainValue);
-    gainKnob.onValueChange = [this]
-        {
-            outputGain = (float)gainKnob.getValue();
-            gainValue.setText(juce::String(outputGain * 100.0f, 0) + "%", juce::dontSendNotification);
-        };
-
-    styleKnob(attackKnob);
-    attackKnob.setRange(0.0, 2000.0, 1.0);
-    attackKnob.setSkewFactorFromMidPoint(40.0);
-    attackKnob.setValue(attackMs);
-    addAndMakeVisible(attackKnob);
-    styleLabel(attackLabel, "Attack");
-    styleValue(attackValue);
-    attackKnob.onValueChange = [this]
-        {
-            attackMs = (float)attackKnob.getValue();
-            attackValue.setText(juce::String(attackMs, 0) + " ms", juce::dontSendNotification);
-        };
-
-    styleKnob(widthKnob);
-    widthKnob.setRange(0.0, 2.0, 0.01);
-    widthKnob.setValue(stereoWidth);
-    addAndMakeVisible(widthKnob);
-    styleLabel(widthLabel, "Width");
-    styleValue(widthValue);
-    widthKnob.onValueChange = [this]
-        {
-            stereoWidth = (float)widthKnob.getValue();
-            widthValue.setText(juce::String(stereoWidth, 2) + "x", juce::dontSendNotification);
-        };
-
-    styleKnob(pitchKnob);
-    pitchKnob.setRange(40.0, 5000.0);
-    pitchKnob.setSkewFactorFromMidPoint(440.0);
-    pitchKnob.setValue(220.0);
-    addAndMakeVisible(pitchKnob);
-    styleLabel(pitchLabel, "Pitch");
-    styleValue(pitchValue);
-    pitchKnob.onValueChange = [this]
-        {
-            frequency = (float)pitchKnob.getValue();
-            updatePhaseDelta();
-            pitchValue.setText(juce::String(frequency, 1) + " Hz", juce::dontSendNotification);
-        };
-
-    styleKnob(cutoffKnob);
-    cutoffKnob.setRange(80.0, 10000.0, 1.0);
-    cutoffKnob.setSkewFactorFromMidPoint(1000.0);
-    cutoffKnob.setValue(cutoffHz);
-    addAndMakeVisible(cutoffKnob);
-    styleLabel(cutoffLabel, "Cutoff");
-    styleValue(cutoffValue);
-    cutoffKnob.onValueChange = [this]
-        {
-            cutoffHz = (float)cutoffKnob.getValue();
-            cutoffValue.setText(juce::String(cutoffHz, 1) + " Hz", juce::dontSendNotification);
-            updateFilterStatic();
-        };
-
-    styleKnob(resonanceKnob);
-    resonanceKnob.setRange(0.1, 10.0, 0.01);
-    resonanceKnob.setSkewFactorFromMidPoint(0.707);
-    resonanceKnob.setValue(resonanceQ);
-    addAndMakeVisible(resonanceKnob);
-    styleLabel(resonanceLabel, "Resonance (Q)");
-    styleValue(resonanceValue);
-    resonanceKnob.onValueChange = [this]
-        {
-            resonanceQ = (float)resonanceKnob.getValue();
-            if (resonanceQ < 0.1f) resonanceQ = 0.1f;
-            resonanceValue.setText(juce::String(resonanceQ, 2), juce::dontSendNotification);
-            updateFilterStatic();
-        };
-
-    styleKnob(releaseKnob);
-    releaseKnob.setRange(1.0, 4000.0, 1.0);
-    releaseKnob.setSkewFactorFromMidPoint(200.0);
-    releaseKnob.setValue(releaseMs);
-    addAndMakeVisible(releaseKnob);
-    styleLabel(releaseLabel, "Release");
-    styleValue(releaseValue);
-    releaseKnob.onValueChange = [this]
-        {
-            releaseMs = (float)releaseKnob.getValue();
-            releaseValue.setText(juce::String(releaseMs, 0) + " ms", juce::dontSendNotification);
-        };
-
-    styleKnob(lfoKnob);
-    lfoKnob.setRange(0.05, 15.0);
-    lfoKnob.setValue(lfoRateHz);
-    addAndMakeVisible(lfoKnob);
-    styleLabel(lfoLabel, "LFO Rate");
-    styleValue(lfoValue);
-    lfoKnob.onValueChange = [this]
-        {
-            lfoRateHz = (float)lfoKnob.getValue();
-            lfoValue.setText(juce::String(lfoRateHz, 2) + " Hz", juce::dontSendNotification);
-        };
-
-    styleKnob(lfoDepthKnob);
-    lfoDepthKnob.setRange(0.0, 1.0);
-    lfoDepthKnob.setValue(lfoDepth);
-    addAndMakeVisible(lfoDepthKnob);
-    styleLabel(lfoDepthLabel, "LFO Depth");
-    styleValue(lfoDepthValue);
-    lfoDepthKnob.onValueChange = [this]
-        {
-            lfoDepth = (float)lfoDepthKnob.getValue();
-            lfoDepthValue.setText(juce::String(lfoDepth, 2), juce::dontSendNotification);
-        };
-
-    styleKnob(filterModKnob);
-    filterModKnob.setRange(0.0, 1.0, 0.001);
-    filterModKnob.setValue(lfoCutModAmt);
-    addAndMakeVisible(filterModKnob);
-    styleLabel(filterModLabel, "Filter Mod");
-    styleValue(filterModValue);
-    filterModKnob.onValueChange = [this]
-        {
-            lfoCutModAmt = (float)filterModKnob.getValue();
-            filterModValue.setText(juce::String(lfoCutModAmt, 2), juce::dontSendNotification);
-        };
-
-    audioToggle.setClickingTogglesState(true);
-    audioToggle.setToggleState(true, juce::dontSendNotification);
-    audioToggle.onClick = [this]
-        {
-            audioEnabled = audioToggle.getToggleState();
-            audioToggle.setButtonText(audioEnabled ? "Audio ON" : "Audio OFF");
-        };
-    addAndMakeVisible(audioToggle);
-
-    auto devices = juce::MidiInput::getAvailableDevices();
-    for (auto& d : devices)
-    {
-        deviceManager.setMidiInputDeviceEnabled(d.identifier, true);
-        deviceManager.addMidiInputDeviceCallback(d.identifier, this);
-    }
-
-    addAndMakeVisible(keyboardComponent);
-    keyboardState.addListener(this);
-    keyboardComponent.setMidiChannel(1);
-    keyboardComponent.setAvailableRange(36, 84);
-
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
-
-    startTimerHz(60);
+    startTimerHz(scopeTimerHz);
 }
 
 MainComponent::~MainComponent()
 {
-    auto devices = juce::MidiInput::getAvailableDevices();
-    for (auto& d : devices)
-        deviceManager.removeMidiInputDeviceCallback(d.identifier, this);
+    for (auto& id : activeMidiInputs)
+    {
+        deviceManager.removeMidiInputDeviceCallback(id, this);
+        deviceManager.setMidiInputDeviceEnabled(id, false);
+    }
+    activeMidiInputs.clear();
 
     keyboardState.removeListener(this);
     shutdownAudio();
 }
 
 //==============================================================================
-void MainComponent::prepareToPlay(int, double sampleRate)
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    currentSR = sampleRate;
-    phase = 0.0f;
-    lfoPhase = 0.0f;
+    currentSampleRate = sampleRate;
     scopeWritePos = 0;
-    updatePhaseDelta();
-    updateFilterStatic();
+    scopeBuffer.clear();
+
+    juce::dsp::ProcessSpec spec { sampleRate, static_cast<juce::uint32>(juce::jmax(1, samplesPerBlockExpected)), 2 };
+    oscillator.prepare(spec);
+    oscillator.reset();
+
+    lfoOscillator.prepare(spec);
+    lfoOscillator.reset();
+
+    filter.prepare(spec);
+    filter.reset();
+    filter.setType(juce::dsp::StateVariableTPTFilterType::lowpass);
+
+    envelope.reset();
+    envelope.setSampleRate(sampleRate);
+
+    updateEnvelopeParameters();
 }
 
-void MainComponent::updateFilterCoeffs(double cutoff, double Q)
+float MainComponent::renderMorphSample(float phase, float morph) const
 {
-    if (cutoff < 20.0)  cutoff = 20.0;
-    if (cutoff > 20000.0) cutoff = 20000.0;
-    if (Q < 0.1) Q = 0.1;
+    const auto wrapped = std::fmod(phase, juce::MathConstants<float>::twoPi);
+    const auto ph = wrapped < 0.0f ? wrapped + juce::MathConstants<float>::twoPi : wrapped;
 
-    const double w0 = juce::MathConstants<double>::twoPi * cutoff / currentSR;
-    const double cw = std::cos(w0);
-    const double sw = std::sin(w0);
-    const double alpha = sw / (2.0 * Q);
+    const float sine = std::sin(ph);
+    const float tri = (2.0f / juce::MathConstants<float>::pi) * std::asin(sine);
+    const float saw = 2.0f * (ph / juce::MathConstants<float>::twoPi) - 1.0f;
+    const float sqr = std::tanh(3.0f * sine);
 
-    double b0 = (1.0 - cw) * 0.5;
-    double b1 = 1.0 - cw;
-    double b2 = (1.0 - cw) * 0.5;
-    double a0 = 1.0 + alpha;
-    double a1 = -2.0 * cw;
-    double a2 = 1.0 - alpha;
-
-    juce::IIRCoefficients c(b0 / a0, b1 / a0, b2 / a0,
-        1.0, a1 / a0, a2 / a0);
-
-    filterL.setCoefficients(c);
-    filterR.setCoefficients(c);
-}
-
-void MainComponent::updateFilterStatic()
-{
-    updateFilterCoeffs(cutoffHz, resonanceQ);
-}
-
-void MainComponent::updatePhaseDelta()
-{
-    phaseDelta = juce::MathConstants<float>::twoPi * frequency / (float)currentSR;
-}
-
-inline float MainComponent::renderMorphSample(float ph, float morph) const
-{
-    while (ph >= juce::MathConstants<float>::twoPi) ph -= juce::MathConstants<float>::twoPi;
-    if (ph < 0.0f) ph += juce::MathConstants<float>::twoPi;
-
-    const float m = juce::jlimit(0.0f, 1.0f, morph);
     const float seg = 1.0f / 3.0f;
+    const float m = juce::jlimit(0.0f, 1.0f, morph);
 
     if (m < seg)
-        return juce::jmap(m / seg, sine(ph), tri(ph));
-    else if (m < 2.0f * seg)
-        return juce::jmap((m - seg) / seg, tri(ph), saw(ph));
-    else
-        return std::tanh(juce::jmap((m - 2.0f * seg) / seg, saw(ph), sqr(ph)));
+        return juce::jmap(m / seg, sine, tri);
+    if (m < 2.0f * seg)
+        return juce::jmap((m - seg) / seg, tri, saw);
+
+    return std::tanh(juce::jmap((m - 2.0f * seg) / seg, saw, sqr));
+}
+
+void MainComponent::updateEnvelopeParameters()
+{
+    juce::ADSR::Parameters params;
+    params.attack = attackParam ? attackParam->load() * 0.001f : 0.005f;
+    params.decay = 0.0f;
+    params.sustain = 1.0f;
+    params.release = releaseParam ? releaseParam->load() * 0.001f : 0.2f;
+    envelope.setParameters(params);
+}
+
+void MainComponent::updateFilterParameters(float lfoValue)
+{
+    if (! cutoffParam || ! resonanceParam)
+        return;
+
+    const auto cutoffHz = cutoffParam->load();
+    const auto modAmt = filterModParam ? filterModParam->load() : 0.0f;
+    const auto modFactor = std::pow(2.0f, static_cast<double>(modAmt) * static_cast<double>(lfoValue));
+    const auto effectiveCutoff = juce::jlimit(80.0f, 14000.0f, cutoffHz * static_cast<float>(modFactor));
+
+    filter.setCutoffFrequency(effectiveCutoff);
+    filter.setResonance(resonanceParam->load());
+}
+
+void MainComponent::initialiseParameterPointers()
+{
+    waveParam = valueTree.getRawParameterValue(ParamIDs::wave);
+    gainParam = valueTree.getRawParameterValue(ParamIDs::gain);
+    attackParam = valueTree.getRawParameterValue(ParamIDs::attack);
+    widthParam = valueTree.getRawParameterValue(ParamIDs::width);
+    pitchParam = valueTree.getRawParameterValue(ParamIDs::pitch);
+    cutoffParam = valueTree.getRawParameterValue(ParamIDs::cutoff);
+    resonanceParam = valueTree.getRawParameterValue(ParamIDs::resonance);
+    releaseParam = valueTree.getRawParameterValue(ParamIDs::release);
+    lfoRateParam = valueTree.getRawParameterValue(ParamIDs::lfoRate);
+    lfoDepthParam = valueTree.getRawParameterValue(ParamIDs::lfoDepth);
+    filterModParam = valueTree.getRawParameterValue(ParamIDs::filterMod);
 }
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
-    auto* l = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
-    auto* r = bufferToFill.buffer->getNumChannels() > 1
-        ? bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample) : nullptr;
+    auto& buffer = *bufferToFill.buffer;
+    const auto numChannels = buffer.getNumChannels();
+    if (numChannels == 0)
+        return;
 
-    const float lfoInc = juce::MathConstants<float>::twoPi * lfoRateHz / (float)currentSR;
+    auto* left = buffer.getWritePointer(0, bufferToFill.startSample);
+    auto* right = numChannels > 1 ? buffer.getWritePointer(1, bufferToFill.startSample) : nullptr;
+
+    updateEnvelopeParameters();
+
+    const auto gain = gainParam ? gainParam->load() : 0.5f;
+    const auto width = widthParam ? widthParam->load() : 1.0f;
+    const auto basePitch = pitchParam ? pitchParam->load() : 220.0f;
+    const auto lfoRate = lfoRateParam ? lfoRateParam->load() : 5.0f;
+    const auto vibratoDepth = lfoDepthParam ? lfoDepthParam->load() : 0.0f;
+
+    lfoOscillator.setFrequency(lfoRate);
 
     for (int i = 0; i < bufferToFill.numSamples; ++i)
     {
-        const float target = (audioEnabled && midiGate) ? 1.0f : 0.0f;
-        const float tauMs = (target >= envLevel) ? attackMs : releaseMs;
-        const float tauSec = juce::jmax(0.0001f, tauMs * 0.001f);
-        const float alpha = std::exp(-1.0f / (tauSec * (float)currentSR));
-        envLevel += (target - envLevel) * (1.0f - alpha);
+        const auto lfoValue = lfoOscillator.processSample(0.0f);
+        updateFilterParameters(lfoValue);
 
-        float lfoS = std::sin(lfoPhase);
-        float vibrato = 1.0f + (lfoDepth * lfoS);
-        lfoPhase += lfoInc;
-        if (lfoPhase >= juce::MathConstants<float>::twoPi) lfoPhase -= juce::MathConstants<float>::twoPi;
-
-        float s = renderMorphSample(phase, waveMorph) * (outputGain * currentVelocity);
-        phase += phaseDelta * vibrato;
-
-        if (++filterUpdateCount >= filterUpdateStep)
+        const bool gateActive = audioEnabled && (midiGate || envelope.isActive());
+        if (! gateActive && ! envelope.isActive())
         {
-            filterUpdateCount = 0;
-            const double modFactor = std::pow(2.0, (double)lfoCutModAmt * (double)lfoS);
-            const double effCut = juce::jlimit(80.0, 14000.0, (double)cutoffHz * modFactor);
-            updateFilterCoeffs(effCut, (double)resonanceQ);
+            left[i] = 0.0f;
+            if (right) right[i] = 0.0f;
+            scopeBuffer.setSample(0, scopeWritePos, 0.0f);
+            scopeWritePos = (scopeWritePos + 1) % scopeBuffer.getNumSamples();
+            continue;
         }
 
-        float fL = filterL.processSingleSampleRaw(s);
-        float fR = (r ? filterR.processSingleSampleRaw(s) : fL);
+        const auto freqSource = currentMidiNote >= 0 ? midiNoteToFreq(currentMidiNote) : basePitch;
+        const auto vibratoFactor = juce::jlimit(0.0f, 4.0f, 1.0f + vibratoDepth * lfoValue);
+        oscillator.setFrequency(juce::jlimit(20.0f, 20000.0f, freqSource * vibratoFactor));
 
-        fL *= envLevel;
-        fR *= envLevel;
+        const auto oscSample = oscillator.processSample(0.0f);
+        const auto envValue = envelope.getNextSample();
+        const auto voice = oscSample * (audioEnabled ? envValue : 0.0f) * currentVelocity;
 
-        float mid = 0.5f * (fL + fR);
-        float side = 0.5f * (fL - fR) * stereoWidth;
-        l[i] = mid + side;
-        if (r) r[i] = mid - side;
+        const auto filteredL = filter.processSample(0, voice);
+        const auto filteredR = numChannels > 1 ? filter.processSample(1, voice) : filteredL;
 
-        scopeBuffer.setSample(0, scopeWritePos, l[i]);
+        const auto mid = 0.5f * (filteredL + filteredR);
+        const auto side = 0.5f * (filteredL - filteredR) * width;
+
+        left[i] = (mid + side) * gain;
+        if (right)
+            right[i] = (mid - side) * gain;
+
+        scopeBuffer.setSample(0, scopeWritePos, left[i]);
         scopeWritePos = (scopeWritePos + 1) % scopeBuffer.getNumSamples();
     }
 }
@@ -377,27 +347,32 @@ void MainComponent::timerCallback()
     repaint();
 }
 
+void MainComponent::parentHierarchyChanged()
+{
+    juce::Component::parentHierarchyChanged();
+
+    if (auto* window = findParentComponentOfClass<juce::ResizableWindow>())
+    {
+        window->setResizable(true, true);
+        window->setResizeLimits(minWidth, minHeight, 9999, 9999);
+    }
+}
+
 // ✅ FINAL DEFINITIVE FIX FOR ALL JUCE VERSIONS ✅
 void MainComponent::resized()
 {
-    // Enforce survival layout — prevents overlap
-    const int minWidth = 720;
-    const int minHeight = 420;
-    if (getWidth() < minWidth || getHeight() < minHeight)
-        setSize(std::max(getWidth(), minWidth), std::max(getHeight(), minHeight));
+    auto area = getLocalBounds().reduced(headerMargin);
 
-    auto area = getLocalBounds().reduced(16);
+    auto bar = area.removeFromTop(headerBarHeight);
+    audioToggle.setBounds(bar.getRight() - audioButtonWidth, bar.getY() + 4, audioButtonWidth, audioButtonHeight);
 
-    auto bar = area.removeFromTop(36);
-    audioToggle.setBounds(bar.getRight() - 100, bar.getY() + 4, 96, 28);
-
-    auto strip = area.removeFromTop(110);
-    const int knob = 48;
+    auto strip = area.removeFromTop(controlStripHeight);
+    const int knob = knobSize;
     const int numKnobs = 11;
     const int colWidth = strip.getWidth() / numKnobs;
 
-    struct Item { juce::Label* L; juce::Slider* S; juce::Label* V; };
-    Item items[numKnobs] = {
+    const std::array<std::tuple<juce::Label*, juce::Slider*, juce::Label*>, 11> items =
+    { {
         { &waveLabel, &waveKnob, &waveValue },
         { &gainLabel, &gainKnob, &gainValue },
         { &attackLabel, &attackKnob, &attackValue },
@@ -409,7 +384,7 @@ void MainComponent::resized()
         { &lfoLabel, &lfoKnob, &lfoValue },
         { &lfoDepthLabel, &lfoDepthKnob, &lfoDepthValue },
         { &filterModLabel, &filterModKnob, &filterModValue }
-    };
+    } };
 
     const int labelH = 14;
     const int valueH = 14;
@@ -420,20 +395,244 @@ void MainComponent::resized()
     for (int i = 0; i < numKnobs; ++i)
     {
         const int x = strip.getX() + i * colWidth + (colWidth - knob) / 2;
-        items[i].L->setBounds(x, labelY, knob, labelH);
-        items[i].S->setBounds(x, knobY, knob, knob);
-        items[i].V->setBounds(x, valueY, knob, valueH);
+        auto [caption, slider, value] = items[static_cast<size_t>(i)];
+        caption->setBounds(x, labelY, knob, labelH);
+        slider->setBounds(x, knobY, knob, knob);
+        value->setBounds(x, valueY, knob, valueH);
     }
 
-    const int minKbH = 60;
-    int kbH = std::max(minKbH, area.getHeight() / 5);
-    auto kbArea = area.removeFromBottom(kbH);
-    keyboardComponent.setBounds(kbArea);
+    const int keyboardHeight = std::max(keyboardMinHeight, area.getHeight() / 5);
+    auto keyboardArea = area.removeFromBottom(keyboardHeight);
+    keyboardComponent.setBounds(keyboardArea);
 
-    float keyW = juce::jlimit(16.0f, 40.0f, kbArea.getWidth() / 20.0f);
-    keyboardComponent.setKeyWidth(keyW);
+    const float keyWidth = juce::jlimit(16.0f, 40.0f, keyboardArea.getWidth() / 20.0f);
+    keyboardComponent.setKeyWidth(keyWidth);
 
     scopeRect = area.reduced(8, 8);
+}
+
+void MainComponent::initialiseUi()
+{
+    initialiseSliders();
+    initialiseToggle();
+}
+
+void MainComponent::initialiseSliders()
+{
+    sliderAttachments.clear();
+    sliderAttachments.reserve(11);
+
+    struct SliderInfo
+    {
+        juce::Slider* slider;
+        juce::Label* caption;
+        juce::Label* value;
+        juce::String captionText;
+        juce::String paramID;
+        std::function<void(juce::Slider&)> configureRange;
+        std::function<juce::String(double)> formatValue;
+    };
+
+    const std::array<SliderInfo, 11> sliderInfos =
+    { {
+        { &waveKnob, &waveLabel, &waveValue, "Waveform", ParamIDs::wave,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 1.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2);
+            } },
+        { &gainKnob, &gainLabel, &gainValue, "Gain", ParamIDs::gain,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 1.0);
+            },
+            [](double value)
+            {
+                return juce::String(value * 100.0, 0) + "%";
+            } },
+        { &attackKnob, &attackLabel, &attackValue, "Attack", ParamIDs::attack,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 2000.0, 1.0);
+                s.setSkewFactorFromMidPoint(40.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 0) + " ms";
+            } },
+        { &widthKnob, &widthLabel, &widthValue, "Width", ParamIDs::width,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 2.0, 0.01);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2) + "x";
+            } },
+        { &pitchKnob, &pitchLabel, &pitchValue, "Pitch", ParamIDs::pitch,
+            [](juce::Slider& s)
+            {
+                s.setRange(40.0, 5000.0);
+                s.setSkewFactorFromMidPoint(440.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 1) + " Hz";
+            } },
+        { &cutoffKnob, &cutoffLabel, &cutoffValue, "Cutoff", ParamIDs::cutoff,
+            [](juce::Slider& s)
+            {
+                s.setRange(80.0, 10000.0, 1.0);
+                s.setSkewFactorFromMidPoint(1000.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 1) + " Hz";
+            } },
+        { &resonanceKnob, &resonanceLabel, &resonanceValue, "Resonance (Q)", ParamIDs::resonance,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.1, 10.0, 0.01);
+                s.setSkewFactorFromMidPoint(0.707);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2);
+            } },
+        { &releaseKnob, &releaseLabel, &releaseValue, "Release", ParamIDs::release,
+            [](juce::Slider& s)
+            {
+                s.setRange(1.0, 4000.0, 1.0);
+                s.setSkewFactorFromMidPoint(200.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 0) + " ms";
+            } },
+        { &lfoKnob, &lfoLabel, &lfoValue, "LFO Rate", ParamIDs::lfoRate,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.05, 15.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2) + " Hz";
+            } },
+        { &lfoDepthKnob, &lfoDepthLabel, &lfoDepthValue, "LFO Depth", ParamIDs::lfoDepth,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 1.0);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2);
+            } },
+        { &filterModKnob, &filterModLabel, &filterModValue, "Filter Mod", ParamIDs::filterMod,
+            [](juce::Slider& s)
+            {
+                s.setRange(0.0, 1.0, 0.001);
+            },
+            [](double value)
+            {
+                return juce::String(value, 2);
+            } }
+    } };
+
+    for (const auto& info : sliderInfos)
+    {
+        configureRotarySlider(*info.slider);
+        info.configureRange(*info.slider);
+        addAndMakeVisible(*info.slider);
+        configureCaptionLabel(*info.caption, info.captionText);
+        configureValueLabel(*info.value);
+
+        info.slider->onValueChange = [label = info.value, formatter = info.formatValue, slider = info.slider]()
+        {
+            label->setText(formatter(slider->getValue()), juce::dontSendNotification);
+        };
+
+        if (auto* parameter = valueTree.getParameter(info.paramID))
+            info.slider->setDoubleClickReturnValue(true, parameter->convertFrom0to1(parameter->getDefaultValue()));
+
+        sliderAttachments.emplace_back(std::make_unique<SliderAttachment>(valueTree, info.paramID, *info.slider));
+        info.slider->onValueChange();
+    }
+}
+
+void MainComponent::initialiseToggle()
+{
+    audioToggle.setClickingTogglesState(true);
+    audioToggle.setToggleState(true, juce::dontSendNotification);
+    audioToggle.onClick = [this]
+    {
+        audioEnabled = audioToggle.getToggleState();
+        audioToggle.setButtonText(audioEnabled ? "Audio ON" : "Audio OFF");
+
+        if (audioEnabled)
+        {
+            if (midiGate && ! envelope.isActive())
+                envelope.noteOn();
+        }
+        else
+        {
+            envelope.noteOff();
+        }
+    };
+    audioToggle.setButtonText("Audio ON");
+    addAndMakeVisible(audioToggle);
+}
+
+void MainComponent::initialiseMidiInputs()
+{
+    activeMidiInputs.clear();
+    auto devices = juce::MidiInput::getAvailableDevices();
+    for (const auto& device : devices)
+    {
+        deviceManager.setMidiInputDeviceEnabled(device.identifier, true);
+        deviceManager.addMidiInputDeviceCallback(device.identifier, this);
+
+        activeMidiInputs.addIfNotAlreadyThere(device.identifier);
+    }
+}
+
+void MainComponent::initialiseKeyboard()
+{
+    addAndMakeVisible(keyboardComponent);
+    keyboardState.addListener(this);
+    keyboardComponent.setMidiChannel(1);
+    keyboardComponent.setAvailableRange(36, 84);
+
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
+}
+
+void MainComponent::configureRotarySlider(juce::Slider& slider)
+{
+    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
+        juce::MathConstants<float>::pi * 2.8f, true);
+}
+
+void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String& text)
+{
+    label.setText(text, juce::dontSendNotification);
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(label);
+}
+
+void MainComponent::configureValueLabel(juce::Label& label)
+{
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(label);
 }
 
 //==============================================================================
@@ -445,9 +644,11 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
         noteStack.add(m.getNoteNumber());
         currentMidiNote = m.getNoteNumber();
         currentVelocity = juce::jlimit(0.0f, 1.0f, m.getVelocity() / 127.0f);
-        frequency = midiNoteToFreq(currentMidiNote);
-        updatePhaseDelta();
+        const bool wasGateActive = midiGate;
         midiGate = true;
+
+        if (! wasGateActive && audioEnabled)
+            envelope.noteOn();
     }
     else if (m.isNoteOff())
     {
@@ -456,12 +657,11 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
         {
             midiGate = false;
             currentMidiNote = -1;
+            envelope.noteOff();
         }
         else
         {
             currentMidiNote = noteStack.getLast();
-            frequency = midiNoteToFreq(currentMidiNote);
-            updatePhaseDelta();
             midiGate = true;
         }
     }
@@ -470,6 +670,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
         noteStack.clear();
         midiGate = false;
         currentMidiNote = -1;
+        envelope.noteOff();
     }
 }
 
@@ -478,9 +679,11 @@ void MainComponent::handleNoteOn(juce::MidiKeyboardState*, int, int midiNoteNumb
     noteStack.add(midiNoteNumber);
     currentMidiNote = midiNoteNumber;
     currentVelocity = juce::jlimit(0.0f, 1.0f, velocity);
-    frequency = midiNoteToFreq(currentMidiNote);
-    updatePhaseDelta();
+    const bool wasGateActive = midiGate;
     midiGate = true;
+
+    if (! wasGateActive && audioEnabled)
+        envelope.noteOn();
 }
 
 void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNumber, float)
@@ -490,12 +693,11 @@ void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNum
     {
         midiGate = false;
         currentMidiNote = -1;
+        envelope.noteOff();
     }
     else
     {
         currentMidiNote = noteStack.getLast();
-        frequency = midiNoteToFreq(currentMidiNote);
-        updatePhaseDelta();
         midiGate = true;
     }
 }

@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+#include <memory>
+#include <vector>
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -23,41 +25,34 @@ public:
     void handleNoteOff(juce::MidiKeyboardState*, int midiChannel, int midiNoteNumber, float /*velocity*/) override;
 
 private:
-    // ===== Synth state =====
-    float   phase = 0.0f;
-    float   phaseDelta = 0.0f;
-    float   frequency = 220.0f;
+    struct StandaloneProcessor;
 
-    // LFO (vibrato)
-    float   lfoPhase = 0.0f;
-    float   lfoRateHz = 5.0f;
-    float   lfoDepth = 0.03f;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
 
-    // Output Gain
-    float   outputGain = 0.5f;
+    // ===== Parameter + DSP state =====
+    std::unique_ptr<StandaloneProcessor> processor;
+    juce::UndoManager undoManager;
+    juce::AudioProcessorValueTreeState valueTree;
 
-    // Filter (cutoff + resonance + per-channel IIR)
-    float   cutoffHz = 1000.0f;
-    float   resonanceQ = 0.707f;
-    juce::IIRFilter filterL, filterR;
+    std::atomic<float>* waveParam = nullptr;
+    std::atomic<float>* gainParam = nullptr;
+    std::atomic<float>* attackParam = nullptr;
+    std::atomic<float>* widthParam = nullptr;
+    std::atomic<float>* pitchParam = nullptr;
+    std::atomic<float>* cutoffParam = nullptr;
+    std::atomic<float>* resonanceParam = nullptr;
+    std::atomic<float>* releaseParam = nullptr;
+    std::atomic<float>* lfoRateParam = nullptr;
+    std::atomic<float>* lfoDepthParam = nullptr;
+    std::atomic<float>* filterModParam = nullptr;
 
-    float   lfoCutModAmt = 0.0f;
-
-    // Envelope
-    float   attackMs = 5.0f;
-    float   releaseMs = 200.0f;
-    float   envLevel = 0.0f;
-
-    // Stereo width
-    float   stereoWidth = 1.0f;
-
-    int filterUpdateStep = 16;
-    int filterUpdateCount = 0;
-    double currentSR = 44100.0;
-
-    float waveMorph = 0.0f;
-    juce::AudioBuffer<float> scopeBuffer{ 1, 2048 };
+    juce::dsp::Oscillator<float> oscillator;
+    juce::dsp::Oscillator<float> lfoOscillator;
+    juce::ADSR envelope;
+    juce::dsp::StateVariableTPTFilter<float> filter;
+    juce::AudioBuffer<float> scopeBuffer { 1, 2048 };
     int scopeWritePos = 0;
+    double currentSampleRate = 44100.0;
 
     // ===== UI Controls =====
     juce::Slider waveKnob, gainKnob, attackKnob, widthKnob;
@@ -76,40 +71,45 @@ private:
     juce::Label lfoDepthLabel, lfoDepthValue;
     juce::Label filterModLabel, filterModValue;
 
-    juce::TextButton audioToggle{ "Audio ON" };
+    juce::TextButton audioToggle { "Audio ON" };
     bool audioEnabled = true;
+
+    std::vector<std::unique_ptr<SliderAttachment>> sliderAttachments;
 
     // ===== MIDI keyboard UI =====
     juce::MidiKeyboardState keyboardState;
     juce::MidiKeyboardComponent keyboardComponent { keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard };
 
     // ===== MIDI state (monophonic, last-note priority) =====
-    juce::Array<int> noteStack;   // holds pressed MIDI notes
+    juce::Array<int> noteStack;
     int currentMidiNote = -1;
     float currentVelocity = 1.0f;
-    bool midiGate = false;        // gate controlled by MIDI
+    bool midiGate = false;
+    juce::StringArray activeMidiInputs;
 
-    // Scope area cache (so paint knows where to draw when keyboard steals space)
+    // Layout helpers
+    juce::ComponentBoundsConstrainer boundsConstrainer;
     juce::Rectangle<int> scopeRect;
 
     // ===== Helpers =====
-    void updatePhaseDelta();
-    void updateFilterCoeffs(double cutoff, double Q);
-    void updateFilterStatic();
-    inline float renderMorphSample(float ph, float morph) const;
+    void initialiseUi();
+    void initialiseSliders();
+    void initialiseToggle();
+    void initialiseMidiInputs();
+    void initialiseKeyboard();
+    void configureRotarySlider(juce::Slider& slider);
+    void configureCaptionLabel(juce::Label& label, const juce::String& text);
+    void configureValueLabel(juce::Label& label);
+    void initialiseParameterPointers();
+    void updateEnvelopeParameters();
+    void updateFilterParameters(float lfoValue);
+    float renderMorphSample(float phase, float morph) const;
     int findZeroCrossingIndex(int searchSpan) const;
     void timerCallback() override;
+    void parentHierarchyChanged() override;
 
-    inline float sine(float ph) const { return std::sin(ph); }
-    inline float tri(float ph)  const { return (2.0f / juce::MathConstants<float>::pi) * std::asin(std::sin(ph)); }
-    inline float saw(float ph)  const { return 2.0f * (ph / juce::MathConstants<float>::twoPi) - 1.0f; }
-    inline float sqr(float ph)  const { return std::tanh(3.0f * std::sin(ph)); }
-
-    static inline float midiNoteToFreq(int midiNote)
-    {
-        // A4 = 440 Hz, MIDI 69
-        return 440.0f * std::pow(2.0f, (midiNote - 69) / 12.0f);
-    }
+    static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    static float midiNoteToFreq(int midiNote);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
