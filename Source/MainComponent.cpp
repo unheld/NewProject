@@ -554,7 +554,7 @@ void MainComponent::initialiseKeyboard()
     addAndMakeVisible(keyboardComponent);
     keyboardState.addListener(this);
     keyboardComponent.setMidiChannel(1);
-    keyboardComponent.setAvailableRange(36, 84);
+    keyboardComponent.setAvailableRange(0, 127);
 
     keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
