@@ -25,13 +25,20 @@ public:
 private:
     // ===== Synth state =====
     float   phase = 0.0f;
-    float   phaseDelta = 0.0f;
-    float   frequency = 220.0f;
+    float   targetFrequency = 220.0f;
 
     // LFO (vibrato)
     float   lfoPhase = 0.0f;
     float   lfoRateHz = 5.0f;
     float   lfoDepth = 0.03f;
+
+    // Smoothed parameters for a more polished response
+    juce::SmoothedValue<float> frequencySmoothed;
+    juce::SmoothedValue<float> gainSmoothed;
+    juce::SmoothedValue<float> cutoffSmoothed;
+    juce::SmoothedValue<float> resonanceSmoothed;
+    juce::SmoothedValue<float> stereoWidthSmoothed;
+    juce::SmoothedValue<float> lfoDepthSmoothed;
 
     // Output Gain
     float   outputGain = 0.5f;
@@ -45,8 +52,11 @@ private:
 
     // Envelope
     float   attackMs = 5.0f;
+    float   decayMs = 80.0f;
+    float   sustainLevel = 0.7f;
     float   releaseMs = 200.0f;
-    float   envLevel = 0.0f;
+    juce::ADSR envelope;
+    juce::ADSR::Parameters envelopeParams;
 
     // Stereo width
     float   stereoWidth = 1.0f;
@@ -60,13 +70,15 @@ private:
     int scopeWritePos = 0;
 
     // ===== UI Controls =====
-    juce::Slider waveKnob, gainKnob, attackKnob, widthKnob;
+    juce::Slider waveKnob, gainKnob, attackKnob, decayKnob, sustainKnob, widthKnob;
     juce::Slider pitchKnob, cutoffKnob, resonanceKnob, releaseKnob;
     juce::Slider lfoKnob, lfoDepthKnob, filterModKnob;
 
     juce::Label waveLabel, waveValue;
     juce::Label gainLabel, gainValue;
     juce::Label attackLabel, attackValue;
+    juce::Label decayLabel, decayValue;
+    juce::Label sustainLabel, sustainValue;
     juce::Label widthLabel, widthValue;
     juce::Label pitchLabel, pitchValue;
     juce::Label cutoffLabel, cutoffValue;
@@ -85,10 +97,9 @@ private:
 
     // ===== MIDI state (monophonic, last-note priority) =====
     juce::Array<int> noteStack;   // holds pressed MIDI notes
+    juce::HashMap<int, float> noteVelocities;
     int currentMidiNote = -1;
     float currentVelocity = 1.0f;
-    bool midiGate = false;        // gate controlled by MIDI
-
     // Scope area cache (so paint knows where to draw when keyboard steals space)
     juce::Rectangle<int> scopeRect;
 
@@ -102,12 +113,17 @@ private:
     void configureCaptionLabel(juce::Label& label, const juce::String& text);
     void configureValueLabel(juce::Label& label);
 
-    void updatePhaseDelta();
+    void resetSmoothers(double sampleRate);
+    void setTargetFrequency(float newFrequency, bool force = false);
+    void updateEnvelopeParameters();
     void updateFilterCoeffs(double cutoff, double Q);
     void updateFilterStatic();
     inline float renderMorphSample(float ph, float morph) const;
     int findZeroCrossingIndex(int searchSpan) const;
     void timerCallback() override;
+
+    void startNote(int midiNoteNumber, float velocity);
+    void stopNote(int midiNoteNumber);
 
     inline float sine(float ph) const { return std::sin(ph); }
     inline float tri(float ph)  const { return (2.0f / juce::MathConstants<float>::pi) * std::asin(std::sin(ph)); }

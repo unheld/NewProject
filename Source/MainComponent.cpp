@@ -25,6 +25,13 @@ MainComponent::MainComponent()
 
     scopeBuffer.clear();
 
+    frequencySmoothed.setCurrentAndTargetValue(targetFrequency);
+    gainSmoothed.setCurrentAndTargetValue(outputGain);
+    cutoffSmoothed.setCurrentAndTargetValue(cutoffHz);
+    resonanceSmoothed.setCurrentAndTargetValue(resonanceQ);
+    stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
+    lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
+
     initialiseUi();
     initialiseMidiInputs();
     initialiseKeyboard();
@@ -49,15 +56,18 @@ void MainComponent::prepareToPlay(int, double sampleRate)
     phase = 0.0f;
     lfoPhase = 0.0f;
     scopeWritePos = 0;
-    updatePhaseDelta();
+    filterUpdateCount = 0;
+    envelope.setSampleRate(sampleRate);
+    updateEnvelopeParameters();
+    envelope.reset();
+    resetSmoothers(sampleRate);
     updateFilterStatic();
 }
 
 void MainComponent::updateFilterCoeffs(double cutoff, double Q)
 {
-    if (cutoff < 20.0)  cutoff = 20.0;
-    if (cutoff > 20000.0) cutoff = 20000.0;
-    if (Q < 0.1) Q = 0.1;
+    cutoff = juce::jlimit(20.0, 20000.0, cutoff);
+    Q = juce::jlimit(0.1, 12.0, Q);
 
     const double w0 = juce::MathConstants<double>::twoPi * cutoff / currentSR;
     const double cw = std::cos(w0);
@@ -83,9 +93,47 @@ void MainComponent::updateFilterStatic()
     updateFilterCoeffs(cutoffHz, resonanceQ);
 }
 
-void MainComponent::updatePhaseDelta()
+void MainComponent::resetSmoothers(double sampleRate)
 {
-    phaseDelta = juce::MathConstants<float>::twoPi * frequency / (float)currentSR;
+    const double fastRampSeconds = 0.02;
+    const double filterRampSeconds = 0.06;
+    const double spatialRampSeconds = 0.1;
+
+    frequencySmoothed.reset(sampleRate, fastRampSeconds);
+    gainSmoothed.reset(sampleRate, fastRampSeconds);
+    cutoffSmoothed.reset(sampleRate, filterRampSeconds);
+    resonanceSmoothed.reset(sampleRate, filterRampSeconds);
+    stereoWidthSmoothed.reset(sampleRate, spatialRampSeconds);
+    lfoDepthSmoothed.reset(sampleRate, spatialRampSeconds);
+
+    frequencySmoothed.setCurrentAndTargetValue(targetFrequency);
+    gainSmoothed.setCurrentAndTargetValue(outputGain);
+    cutoffSmoothed.setCurrentAndTargetValue(cutoffHz);
+    resonanceSmoothed.setCurrentAndTargetValue(resonanceQ);
+    stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
+    lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
+
+    filterL.reset();
+    filterR.reset();
+}
+
+void MainComponent::updateEnvelopeParameters()
+{
+    envelopeParams.attack = juce::jmax(0.0f, attackMs * 0.001f);
+    envelopeParams.decay = juce::jmax(0.0f, decayMs * 0.001f);
+    envelopeParams.sustain = juce::jlimit(0.0f, 1.0f, sustainLevel);
+    envelopeParams.release = juce::jmax(0.0f, releaseMs * 0.001f);
+    envelope.setParameters(envelopeParams);
+}
+
+void MainComponent::setTargetFrequency(float newFrequency, bool force)
+{
+    targetFrequency = juce::jlimit(20.0f, 20000.0f, newFrequency);
+
+    if (force)
+        frequencySmoothed.setCurrentAndTargetValue(targetFrequency);
+    else
+        frequencySmoothed.setTargetValue(targetFrequency);
 }
 
 inline float MainComponent::renderMorphSample(float ph, float morph) const
@@ -106,6 +154,17 @@ inline float MainComponent::renderMorphSample(float ph, float morph) const
 
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
+    if (bufferToFill.buffer == nullptr || bufferToFill.buffer->getNumChannels() == 0)
+        return;
+
+    bufferToFill.buffer->clear(bufferToFill.startSample, bufferToFill.numSamples);
+
+    if (!audioEnabled)
+    {
+        envelope.reset();
+        return;
+    }
+
     auto* l = bufferToFill.buffer->getWritePointer(0, bufferToFill.startSample);
     auto* r = bufferToFill.buffer->getNumChannels() > 1
         ? bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample) : nullptr;
@@ -114,36 +173,39 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
 
     for (int i = 0; i < bufferToFill.numSamples; ++i)
     {
-        const float target = (audioEnabled && midiGate) ? 1.0f : 0.0f;
-        const float tauMs = (target >= envLevel) ? attackMs : releaseMs;
-        const float tauSec = juce::jmax(0.0001f, tauMs * 0.001f);
-        const float alpha = std::exp(-1.0f / (tauSec * (float)currentSR));
-        envLevel += (target - envLevel) * (1.0f - alpha);
+        const float baseFrequency = frequencySmoothed.getNextValue();
+        const float gain = gainSmoothed.getNextValue() * currentVelocity;
+        const float depth = lfoDepthSmoothed.getNextValue();
+        const float width = stereoWidthSmoothed.getNextValue();
+        const float baseCutoff = cutoffSmoothed.getNextValue();
+        const float baseResonance = resonanceSmoothed.getNextValue();
 
         float lfoS = std::sin(lfoPhase);
-        float vibrato = 1.0f + (lfoDepth * lfoS);
+        float vibrato = 1.0f + (depth * lfoS);
         lfoPhase += lfoInc;
         if (lfoPhase >= juce::MathConstants<float>::twoPi) lfoPhase -= juce::MathConstants<float>::twoPi;
 
-        float s = renderMorphSample(phase, waveMorph) * (outputGain * currentVelocity);
-        phase += phaseDelta * vibrato;
+        float s = renderMorphSample(phase, waveMorph) * gain;
+        const float phaseInc = juce::MathConstants<float>::twoPi * (baseFrequency * vibrato) / (float)currentSR;
+        phase += phaseInc;
 
         if (++filterUpdateCount >= filterUpdateStep)
         {
             filterUpdateCount = 0;
             const double modFactor = std::pow(2.0, (double)lfoCutModAmt * (double)lfoS);
-            const double effCut = juce::jlimit(80.0, 14000.0, (double)cutoffHz * modFactor);
-            updateFilterCoeffs(effCut, (double)resonanceQ);
+            const double effCut = juce::jlimit(80.0, 14000.0, (double)baseCutoff * modFactor);
+            updateFilterCoeffs(effCut, (double)baseResonance);
         }
 
         float fL = filterL.processSingleSampleRaw(s);
         float fR = (r ? filterR.processSingleSampleRaw(s) : fL);
 
-        fL *= envLevel;
-        fR *= envLevel;
+        const float env = envelope.getNextSample();
+        fL *= env;
+        fR *= env;
 
         float mid = 0.5f * (fL + fR);
-        float side = 0.5f * (fL - fR) * stereoWidth;
+        float side = 0.5f * (fL - fR) * width;
         l[i] = mid + side;
         if (r) r[i] = mid - side;
 
@@ -152,7 +214,12 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
     }
 }
 
-void MainComponent::releaseResources() {}
+void MainComponent::releaseResources()
+{
+    filterL.reset();
+    filterR.reset();
+    envelope.reset();
+}
 
 int MainComponent::findZeroCrossingIndex(int searchSpan) const
 {
@@ -220,7 +287,7 @@ void MainComponent::resized()
 
     auto strip = area.removeFromTop(controlStripHeight);
     const int knob = knobSize;
-    const int numKnobs = 11;
+    const int numKnobs = 13;
     const int colWidth = strip.getWidth() / numKnobs;
 
     struct Item { juce::Label* L; juce::Slider* S; juce::Label* V; };
@@ -228,11 +295,13 @@ void MainComponent::resized()
         { &waveLabel, &waveKnob, &waveValue },
         { &gainLabel, &gainKnob, &gainValue },
         { &attackLabel, &attackKnob, &attackValue },
+        { &decayLabel, &decayKnob, &decayValue },
+        { &sustainLabel, &sustainKnob, &sustainValue },
+        { &releaseLabel, &releaseKnob, &releaseValue },
         { &widthLabel, &widthKnob, &widthValue },
         { &pitchLabel, &pitchKnob, &pitchValue },
         { &cutoffLabel, &cutoffKnob, &cutoffValue },
         { &resonanceLabel, &resonanceKnob, &resonanceValue },
-        { &releaseLabel, &releaseKnob, &releaseValue },
         { &lfoLabel, &lfoKnob, &lfoValue },
         { &lfoDepthLabel, &lfoDepthKnob, &lfoDepthValue },
         { &filterModLabel, &filterModKnob, &filterModValue }
@@ -292,6 +361,7 @@ void MainComponent::initialiseSliders()
     gainKnob.onValueChange = [this]
     {
         outputGain = (float)gainKnob.getValue();
+        gainSmoothed.setTargetValue(outputGain);
         gainValue.setText(juce::String(outputGain * 100.0f, 0) + "%", juce::dontSendNotification);
     };
     gainKnob.onValueChange();
@@ -307,8 +377,38 @@ void MainComponent::initialiseSliders()
     {
         attackMs = (float)attackKnob.getValue();
         attackValue.setText(juce::String(attackMs, 0) + " ms", juce::dontSendNotification);
+        updateEnvelopeParameters();
     };
     attackKnob.onValueChange();
+
+    configureRotarySlider(decayKnob);
+    decayKnob.setRange(0.0, 4000.0, 1.0);
+    decayKnob.setSkewFactorFromMidPoint(200.0);
+    decayKnob.setValue(decayMs);
+    addAndMakeVisible(decayKnob);
+    configureCaptionLabel(decayLabel, "Decay");
+    configureValueLabel(decayValue);
+    decayKnob.onValueChange = [this]
+    {
+        decayMs = (float)decayKnob.getValue();
+        decayValue.setText(juce::String(decayMs, 0) + " ms", juce::dontSendNotification);
+        updateEnvelopeParameters();
+    };
+    decayKnob.onValueChange();
+
+    configureRotarySlider(sustainKnob);
+    sustainKnob.setRange(0.0, 1.0, 0.01);
+    sustainKnob.setValue(sustainLevel);
+    addAndMakeVisible(sustainKnob);
+    configureCaptionLabel(sustainLabel, "Sustain");
+    configureValueLabel(sustainValue);
+    sustainKnob.onValueChange = [this]
+    {
+        sustainLevel = (float)sustainKnob.getValue();
+        sustainValue.setText(juce::String(sustainLevel * 100.0f, 0) + "%", juce::dontSendNotification);
+        updateEnvelopeParameters();
+    };
+    sustainKnob.onValueChange();
 
     configureRotarySlider(widthKnob);
     widthKnob.setRange(0.0, 2.0, 0.01);
@@ -319,6 +419,7 @@ void MainComponent::initialiseSliders()
     widthKnob.onValueChange = [this]
     {
         stereoWidth = (float)widthKnob.getValue();
+        stereoWidthSmoothed.setTargetValue(stereoWidth);
         widthValue.setText(juce::String(stereoWidth, 2) + "x", juce::dontSendNotification);
     };
     widthKnob.onValueChange();
@@ -332,9 +433,8 @@ void MainComponent::initialiseSliders()
     configureValueLabel(pitchValue);
     pitchKnob.onValueChange = [this]
     {
-        frequency = (float)pitchKnob.getValue();
-        updatePhaseDelta();
-        pitchValue.setText(juce::String(frequency, 1) + " Hz", juce::dontSendNotification);
+        setTargetFrequency((float)pitchKnob.getValue());
+        pitchValue.setText(juce::String(targetFrequency, 1) + " Hz", juce::dontSendNotification);
     };
     pitchKnob.onValueChange();
 
@@ -348,8 +448,9 @@ void MainComponent::initialiseSliders()
     cutoffKnob.onValueChange = [this]
     {
         cutoffHz = (float)cutoffKnob.getValue();
+        cutoffSmoothed.setTargetValue(cutoffHz);
         cutoffValue.setText(juce::String(cutoffHz, 1) + " Hz", juce::dontSendNotification);
-        updateFilterStatic();
+        filterUpdateCount = filterUpdateStep;
     };
     cutoffKnob.onValueChange();
 
@@ -364,8 +465,9 @@ void MainComponent::initialiseSliders()
     {
         resonanceQ = (float)resonanceKnob.getValue();
         if (resonanceQ < 0.1f) resonanceQ = 0.1f;
+        resonanceSmoothed.setTargetValue(resonanceQ);
         resonanceValue.setText(juce::String(resonanceQ, 2), juce::dontSendNotification);
-        updateFilterStatic();
+        filterUpdateCount = filterUpdateStep;
     };
     resonanceKnob.onValueChange();
 
@@ -380,6 +482,7 @@ void MainComponent::initialiseSliders()
     {
         releaseMs = (float)releaseKnob.getValue();
         releaseValue.setText(juce::String(releaseMs, 0) + " ms", juce::dontSendNotification);
+        updateEnvelopeParameters();
     };
     releaseKnob.onValueChange();
 
@@ -405,6 +508,7 @@ void MainComponent::initialiseSliders()
     lfoDepthKnob.onValueChange = [this]
     {
         lfoDepth = (float)lfoDepthKnob.getValue();
+        lfoDepthSmoothed.setTargetValue(lfoDepth);
         lfoDepthValue.setText(juce::String(lfoDepth, 2), juce::dontSendNotification);
     };
     lfoDepthKnob.onValueChange();
@@ -431,6 +535,15 @@ void MainComponent::initialiseToggle()
     {
         audioEnabled = audioToggle.getToggleState();
         audioToggle.setButtonText(audioEnabled ? "Audio ON" : "Audio OFF");
+        if (!audioEnabled)
+        {
+            envelope.reset();
+            envelope.noteOff();
+            noteStack.clear();
+            noteVelocities.clear();
+            currentMidiNote = -1;
+            currentVelocity = 0.0f;
+        }
     };
     audioToggle.setButtonText("Audio ON");
     addAndMakeVisible(audioToggle);
@@ -483,66 +596,82 @@ void MainComponent::configureValueLabel(juce::Label& label)
     addAndMakeVisible(label);
 }
 
+void MainComponent::startNote(int midiNoteNumber, float velocity)
+{
+    const bool wasIdle = noteStack.isEmpty();
+    const float vel = juce::jlimit(0.0f, 1.0f, velocity);
+
+    noteStack.removeFirstMatchingValue(midiNoteNumber);
+    noteStack.add(midiNoteNumber);
+    noteVelocities.set(midiNoteNumber, vel);
+
+    currentMidiNote = midiNoteNumber;
+    currentVelocity = vel;
+    setTargetFrequency(midiNoteToFreq(currentMidiNote), wasIdle);
+
+    envelope.noteOn();
+}
+
+void MainComponent::stopNote(int midiNoteNumber)
+{
+    noteStack.removeFirstMatchingValue(midiNoteNumber);
+    noteVelocities.remove(midiNoteNumber);
+
+    if (noteStack.isEmpty())
+    {
+        currentMidiNote = -1;
+        currentVelocity = 0.0f;
+        envelope.noteOff();
+    }
+    else
+    {
+        currentMidiNote = noteStack.getLast();
+        if (auto* vel = noteVelocities.getPointer(currentMidiNote))
+            currentVelocity = *vel;
+        else
+            currentVelocity = 1.0f;
+
+        setTargetFrequency(midiNoteToFreq(currentMidiNote));
+    }
+}
+
 //==============================================================================
-// MIDI Input handlers stay unchanged
+// MIDI Input handlers
 void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& m)
 {
     if (m.isNoteOn())
     {
-        noteStack.add(m.getNoteNumber());
-        currentMidiNote = m.getNoteNumber();
-        currentVelocity = juce::jlimit(0.0f, 1.0f, m.getVelocity() / 127.0f);
-        frequency = midiNoteToFreq(currentMidiNote);
-        updatePhaseDelta();
-        midiGate = true;
+        const auto noteNumber = m.getNoteNumber();
+        const float velocity = m.getVelocity() / 127.0f;
+        if (velocity <= 0.0f)
+            stopNote(noteNumber);
+        else
+            startNote(noteNumber, velocity);
     }
     else if (m.isNoteOff())
     {
-        noteStack.removeFirstMatchingValue(m.getNoteNumber());
-        if (noteStack.isEmpty())
-        {
-            midiGate = false;
-            currentMidiNote = -1;
-        }
-        else
-        {
-            currentMidiNote = noteStack.getLast();
-            frequency = midiNoteToFreq(currentMidiNote);
-            updatePhaseDelta();
-            midiGate = true;
-        }
+        stopNote(m.getNoteNumber());
     }
     else if (m.isAllNotesOff() || m.isAllSoundOff())
     {
         noteStack.clear();
-        midiGate = false;
+        noteVelocities.clear();
+        envelope.noteOff();
+        envelope.reset();
+        currentVelocity = 0.0f;
         currentMidiNote = -1;
     }
 }
 
 void MainComponent::handleNoteOn(juce::MidiKeyboardState*, int, int midiNoteNumber, float velocity)
 {
-    noteStack.add(midiNoteNumber);
-    currentMidiNote = midiNoteNumber;
-    currentVelocity = juce::jlimit(0.0f, 1.0f, velocity);
-    frequency = midiNoteToFreq(currentMidiNote);
-    updatePhaseDelta();
-    midiGate = true;
+    if (velocity <= 0.0f)
+        stopNote(midiNoteNumber);
+    else
+        startNote(midiNoteNumber, velocity);
 }
 
 void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNumber, float)
 {
-    noteStack.removeFirstMatchingValue(midiNoteNumber);
-    if (noteStack.isEmpty())
-    {
-        midiGate = false;
-        currentMidiNote = -1;
-    }
-    else
-    {
-        currentMidiNote = noteStack.getLast();
-        frequency = midiNoteToFreq(currentMidiNote);
-        updatePhaseDelta();
-        midiGate = true;
-    }
+    stopNote(midiNoteNumber);
 }
