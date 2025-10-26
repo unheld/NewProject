@@ -39,9 +39,18 @@ private:
     juce::SmoothedValue<float> resonanceSmoothed;
     juce::SmoothedValue<float> stereoWidthSmoothed;
     juce::SmoothedValue<float> lfoDepthSmoothed;
+    juce::SmoothedValue<float> driveSmoothed;
 
     // Output Gain
     float   outputGain = 0.5f;
+    float   driveAmount = 0.0f;
+    float   crushAmount = 0.0f;
+    float   subMixAmount = 0.0f;
+    float   envFilterAmount = 0.0f;
+    float   chaosAmount = 0.0f;
+    float   delayAmount = 0.0f;
+    float   autoPanAmount = 0.0f;
+    float   glitchProbability = 0.0f;
 
     // Filter (cutoff + resonance + per-channel IIR)
     float   cutoffHz = 1000.0f;
@@ -49,6 +58,9 @@ private:
     juce::IIRFilter filterL, filterR;
 
     float   lfoCutModAmt = 0.0f;
+    float   chaosValue = 0.0f;
+    int     chaosSamplesRemaining = 0;
+    juce::Random random;
 
     // Envelope
     float   attackMs = 8.0f;
@@ -69,11 +81,26 @@ private:
     float waveMorph = 0.0f;
     juce::AudioBuffer<float> scopeBuffer{ 1, 2048 };
     int scopeWritePos = 0;
+    float subPhase = 0.0f;
+    float detunePhase = 0.0f;
+    float autoPanPhase = 0.0f;
+    float autoPanRateHz = 0.35f;
+    int crushCounter = 0;
+    float crushHoldL = 0.0f;
+    float crushHoldR = 0.0f;
+    juce::AudioBuffer<float> delayBuffer{ 2, 1 };
+    int delayWritePosition = 0;
+    int maxDelaySamples = 1;
+    int glitchSamplesRemaining = 0;
+    float glitchHeldL = 0.0f;
+    float glitchHeldR = 0.0f;
 
     // ===== UI Controls =====
     juce::Slider waveKnob, gainKnob, attackKnob, decayKnob, sustainKnob, widthKnob;
     juce::Slider pitchKnob, cutoffKnob, resonanceKnob, releaseKnob;
     juce::Slider lfoKnob, lfoDepthKnob, filterModKnob;
+    juce::Slider driveKnob, crushKnob, subMixKnob, envFilterKnob;
+    juce::Slider chaosKnob, delayKnob, autoPanKnob, glitchKnob;
 
     juce::Label waveLabel, waveValue;
     juce::Label gainLabel, gainValue;
@@ -88,6 +115,14 @@ private:
     juce::Label lfoLabel, lfoValue;
     juce::Label lfoDepthLabel, lfoDepthValue;
     juce::Label filterModLabel, filterModValue;
+    juce::Label driveLabel, driveValue;
+    juce::Label crushLabel, crushValue;
+    juce::Label subMixLabel, subMixValue;
+    juce::Label envFilterLabel, envFilterValue;
+    juce::Label chaosLabel, chaosValueLabel;
+    juce::Label delayLabel, delayValue;
+    juce::Label autoPanLabel, autoPanValue;
+    juce::Label glitchLabel, glitchValue;
 
     juce::TextButton audioToggle{ "Audio ON" };
     bool audioEnabled = true;

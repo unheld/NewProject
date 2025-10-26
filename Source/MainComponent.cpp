@@ -37,6 +37,7 @@ MainComponent::MainComponent()
     resonanceSmoothed.setCurrentAndTargetValue(resonanceQ);
     stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
     lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
+    driveSmoothed.setCurrentAndTargetValue(driveAmount);
 
     initialiseUi();
     initialiseMidiInputs();
@@ -63,11 +64,26 @@ void MainComponent::prepareToPlay(int, double sampleRate)
     lfoPhase = 0.0f;
     scopeWritePos = 0;
     filterUpdateCount = 0;
+    subPhase = 0.0f;
+    detunePhase = 0.0f;
+    autoPanPhase = 0.0f;
+    crushCounter = 0;
+    crushHoldL = 0.0f;
+    crushHoldR = 0.0f;
+    chaosValue = 0.0f;
+    chaosSamplesRemaining = 0;
+    glitchSamplesRemaining = 0;
+    glitchHeldL = glitchHeldR = 0.0f;
     resetSmoothers(sampleRate);
     updateFilterStatic();
     amplitudeEnvelope.setSampleRate(sampleRate);
     updateAmplitudeEnvelope();
     amplitudeEnvelope.reset();
+
+    maxDelaySamples = juce::jmax(1, (int)std::ceil(sampleRate * 2.0));
+    delayBuffer.setSize(2, maxDelaySamples);
+    delayBuffer.clear();
+    delayWritePosition = 0;
 }
 
 void MainComponent::updateFilterCoeffs(double cutoff, double Q)
@@ -111,6 +127,7 @@ void MainComponent::resetSmoothers(double sampleRate)
     resonanceSmoothed.reset(sampleRate, filterRampSeconds);
     stereoWidthSmoothed.reset(sampleRate, spatialRampSeconds);
     lfoDepthSmoothed.reset(sampleRate, spatialRampSeconds);
+    driveSmoothed.reset(sampleRate, fastRampSeconds);
 
     frequencySmoothed.setCurrentAndTargetValue(targetFrequency);
     gainSmoothed.setCurrentAndTargetValue(outputGain);
@@ -118,6 +135,7 @@ void MainComponent::resetSmoothers(double sampleRate)
     resonanceSmoothed.setCurrentAndTargetValue(resonanceQ);
     stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
     lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
+    driveSmoothed.setCurrentAndTargetValue(driveAmount);
 
     filterL.reset();
     filterR.reset();
@@ -161,6 +179,22 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         ? bufferToFill.buffer->getWritePointer(1, bufferToFill.startSample) : nullptr;
 
     const float lfoInc = juce::MathConstants<float>::twoPi * lfoRateHz / (float)currentSR;
+    const float autoPanInc = juce::MathConstants<float>::twoPi * autoPanRateHz / (float)currentSR;
+    const float crushAmt = juce::jlimit(0.0f, 1.0f, crushAmount);
+    const float subMixAmt = juce::jlimit(0.0f, 1.0f, subMixAmount);
+    const float envFilterAmt = juce::jlimit(-1.0f, 1.0f, envFilterAmount);
+    const float chaosAmt = juce::jlimit(0.0f, 1.0f, chaosAmount);
+    const float delayAmtLocal = juce::jlimit(0.0f, 1.0f, delayAmount);
+    const float autoPanAmt = juce::jlimit(0.0f, 1.0f, autoPanAmount);
+    const float glitchProbLocal = juce::jlimit(0.0f, 1.0f, glitchProbability);
+    const float delayMix = juce::jmap(delayAmtLocal, 0.0f, 1.0f, 0.0f, 0.65f);
+    const float delayFeedback = juce::jmap(delayAmtLocal, 0.0f, 1.0f, 0.05f, 0.88f);
+    const int delaySamples = (maxDelaySamples > 1)
+        ? juce::jlimit(1, maxDelaySamples - 1,
+            (int)std::round(juce::jmap((double)delayAmtLocal, 0.0, 1.0,
+                currentSR * 0.03,
+                juce::jmin(currentSR * 1.25, (double)maxDelaySamples - 1.0))))
+        : 1;
 
     for (int i = 0; i < bufferToFill.numSamples; ++i)
     {
@@ -174,34 +208,150 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         const float baseCutoff = cutoffSmoothed.getNextValue();
         const float baseResonance = resonanceSmoothed.getNextValue();
         const float ampEnv = amplitudeEnvelope.getNextSample();
+        const float drive = driveSmoothed.getNextValue();
 
         float lfoS = std::sin(lfoPhase);
         float vibrato = 1.0f + (depth * lfoS);
         lfoPhase += lfoInc;
         if (lfoPhase >= juce::MathConstants<float>::twoPi) lfoPhase -= juce::MathConstants<float>::twoPi;
 
-        float s = renderMorphSample(phase, waveMorph) * gain;
-        const float phaseInc = juce::MathConstants<float>::twoPi * (baseFrequency * vibrato) / (float)currentSR;
+        float chaosScale = 1.0f;
+        if (chaosAmt > 0.0f)
+        {
+            if (chaosSamplesRemaining <= 0)
+            {
+                const int span = juce::jmax(1, (int)std::round(juce::jmap(chaosAmt, 0.0f, 1.0f,
+                    (float)currentSR * 0.18f,
+                    (float)currentSR * 0.01f)));
+                chaosSamplesRemaining = span;
+                chaosValue = random.nextFloat() * 2.0f - 1.0f;
+            }
+            chaosScale = juce::jlimit(0.5f, 1.5f, 1.0f + chaosValue * chaosAmt * 0.12f);
+            --chaosSamplesRemaining;
+        }
+        else
+        {
+            chaosValue = 0.0f;
+            chaosSamplesRemaining = 0;
+        }
+
+        const float effectiveFrequency = baseFrequency * chaosScale;
+        const float phaseInc = juce::MathConstants<float>::twoPi * (effectiveFrequency * vibrato) / (float)currentSR;
         phase += phaseInc;
+
+        float subPhaseInc = phaseInc * 0.5f;
+        float detunePhaseInc = phaseInc * 1.01f;
+        subPhase += subPhaseInc;
+        detunePhase += detunePhaseInc;
+        if (subPhase >= juce::MathConstants<float>::twoPi) subPhase -= juce::MathConstants<float>::twoPi;
+        if (detunePhase >= juce::MathConstants<float>::twoPi) detunePhase -= juce::MathConstants<float>::twoPi;
+
+        float primary = renderMorphSample(phase, waveMorph);
+        float subSample = renderMorphSample(subPhase, waveMorph);
+        float detuneSample = renderMorphSample(detunePhase, waveMorph);
+        float combined = juce::jmap(subMixAmt, primary, 0.5f * (primary + subSample + detuneSample));
+        float s = combined * gain;
+
+        if (drive > 0.0f)
+        {
+            float shaped = std::tanh(s * (1.0f + drive * 10.0f));
+            s = juce::jmap(drive, 0.0f, 1.0f, s, shaped);
+        }
 
         if (++filterUpdateCount >= filterUpdateStep)
         {
             filterUpdateCount = 0;
             const double modFactor = std::pow(2.0, (double)lfoCutModAmt * (double)lfoS);
-            const double effCut = juce::jlimit(80.0, 14000.0, (double)baseCutoff * modFactor);
+            const double envFactor = juce::jlimit(0.1, 4.0, 1.0 + (double)envFilterAmt * (double)ampEnv);
+            const double effCut = juce::jlimit(80.0, 14000.0, (double)baseCutoff * modFactor * envFactor);
             updateFilterCoeffs(effCut, (double)baseResonance);
         }
 
         float fL = filterL.processSingleSampleRaw(s);
         float fR = (r ? filterR.processSingleSampleRaw(s) : fL);
 
+        if (crushAmt > 0.0f)
+        {
+            if (crushCounter <= 0)
+            {
+                const int downsampleFactor = juce::jmax(1, (int)std::round(juce::jmap(crushAmt, 0.0f, 1.0f, 1.0f, 32.0f)));
+                crushCounter = downsampleFactor;
+                crushHoldL = fL;
+                crushHoldR = fR;
+            }
+
+            float levels = juce::jmap(crushAmt, 0.0f, 1.0f, 2048.0f, 6.0f);
+            float crushedL = std::round(crushHoldL * levels) / levels;
+            float crushedR = std::round(crushHoldR * levels) / levels;
+            fL = juce::jmap(crushAmt, 0.0f, 1.0f, fL, crushedL);
+            fR = juce::jmap(crushAmt, 0.0f, 1.0f, fR, crushedR);
+            --crushCounter;
+        }
+        else
+        {
+            crushCounter = 0;
+        }
+
         fL *= ampEnv;
         fR *= ampEnv;
 
+        float panMod = autoPanAmt * std::sin(autoPanPhase);
+        autoPanPhase += autoPanInc;
+        if (autoPanPhase >= juce::MathConstants<float>::twoPi) autoPanPhase -= juce::MathConstants<float>::twoPi;
+
+        float dynamicWidth = width * juce::jlimit(0.0f, 3.0f, 1.0f + panMod);
         float mid = 0.5f * (fL + fR);
-        float side = 0.5f * (fL - fR) * width;
-        l[i] = mid + side;
-        if (r) r[i] = mid - side;
+        float side = 0.5f * (fL - fR) * dynamicWidth;
+
+        float dryL = mid + side;
+        float dryR = r ? (mid - side) : dryL;
+
+        float wetL = 0.0f;
+        float wetR = 0.0f;
+        if (delayAmtLocal > 0.0f && maxDelaySamples > 1)
+        {
+            const int readPos = (delayWritePosition - delaySamples + maxDelaySamples) % maxDelaySamples;
+            wetL = delayBuffer.getSample(0, readPos);
+            wetR = delayBuffer.getNumChannels() > 1 ? delayBuffer.getSample(1, readPos) : wetL;
+
+            delayBuffer.setSample(0, delayWritePosition, dryL + wetL * delayFeedback);
+            delayBuffer.setSample(1, delayWritePosition, dryR + wetR * delayFeedback);
+            delayWritePosition = (delayWritePosition + 1) % maxDelaySamples;
+
+            dryL = dryL * (1.0f - delayMix) + wetL * delayMix;
+            dryR = dryR * (1.0f - delayMix) + wetR * delayMix;
+        }
+        else if (maxDelaySamples > 1)
+        {
+            delayBuffer.setSample(0, delayWritePosition, dryL);
+            delayBuffer.setSample(1, delayWritePosition, dryR);
+            delayWritePosition = (delayWritePosition + 1) % maxDelaySamples;
+        }
+
+        if (glitchProbLocal > 0.0f)
+        {
+            if (glitchSamplesRemaining > 0)
+            {
+                --glitchSamplesRemaining;
+                dryL = glitchHeldL;
+                dryR = glitchHeldR;
+            }
+            else if (random.nextFloat() < glitchProbLocal * 0.004f)
+            {
+                glitchSamplesRemaining = juce::jmax(4, (int)std::round(juce::jmap(glitchProbLocal, 0.0f, 1.0f,
+                    12.0f,
+                    (float)currentSR * 0.08f)));
+                glitchHeldL = dryL;
+                glitchHeldR = dryR;
+            }
+        }
+        else
+        {
+            glitchSamplesRemaining = 0;
+        }
+
+        l[i] = dryL;
+        if (r) r[i] = dryR;
 
         scopeBuffer.setSample(0, scopeWritePos, l[i]);
         scopeWritePos = (scopeWritePos + 1) % scopeBuffer.getNumSamples();
@@ -281,7 +431,7 @@ void MainComponent::resized()
 
     auto strip = area.removeFromTop(controlStripHeight);
     const int knob = knobSize;
-    const int numKnobs = 13;
+    const int numKnobs = 21;
     const int colWidth = strip.getWidth() / numKnobs;
 
     struct Item { juce::Label* L; juce::Slider* S; juce::Label* V; };
@@ -298,7 +448,15 @@ void MainComponent::resized()
         { &releaseLabel, &releaseKnob, &releaseValue },
         { &lfoLabel, &lfoKnob, &lfoValue },
         { &lfoDepthLabel, &lfoDepthKnob, &lfoDepthValue },
-        { &filterModLabel, &filterModKnob, &filterModValue }
+        { &filterModLabel, &filterModKnob, &filterModValue },
+        { &driveLabel, &driveKnob, &driveValue },
+        { &crushLabel, &crushKnob, &crushValue },
+        { &subMixLabel, &subMixKnob, &subMixValue },
+        { &envFilterLabel, &envFilterKnob, &envFilterValue },
+        { &chaosLabel, &chaosKnob, &chaosValueLabel },
+        { &delayLabel, &delayKnob, &delayValue },
+        { &autoPanLabel, &autoPanKnob, &autoPanValue },
+        { &glitchLabel, &glitchKnob, &glitchValue }
     };
 
     const int labelH = 14;
@@ -519,6 +677,111 @@ void MainComponent::initialiseSliders()
         filterModValue.setText(juce::String(lfoCutModAmt, 2), juce::dontSendNotification);
     };
     filterModKnob.onValueChange();
+
+    configureRotarySlider(driveKnob);
+    driveKnob.setRange(0.0, 1.0);
+    driveKnob.setValue(driveAmount);
+    addAndMakeVisible(driveKnob);
+    configureCaptionLabel(driveLabel, "Drive");
+    configureValueLabel(driveValue);
+    driveKnob.onValueChange = [this]
+    {
+        driveAmount = (float)driveKnob.getValue();
+        driveSmoothed.setTargetValue(driveAmount);
+        driveValue.setText(juce::String(driveAmount, 2), juce::dontSendNotification);
+    };
+    driveKnob.onValueChange();
+
+    configureRotarySlider(crushKnob);
+    crushKnob.setRange(0.0, 1.0);
+    crushKnob.setValue(crushAmount);
+    addAndMakeVisible(crushKnob);
+    configureCaptionLabel(crushLabel, "Crush");
+    configureValueLabel(crushValue);
+    crushKnob.onValueChange = [this]
+    {
+        crushAmount = (float)crushKnob.getValue();
+        crushValue.setText(juce::String(crushAmount * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    crushKnob.onValueChange();
+
+    configureRotarySlider(subMixKnob);
+    subMixKnob.setRange(0.0, 1.0);
+    subMixKnob.setValue(subMixAmount);
+    addAndMakeVisible(subMixKnob);
+    configureCaptionLabel(subMixLabel, "Sub Mix");
+    configureValueLabel(subMixValue);
+    subMixKnob.onValueChange = [this]
+    {
+        subMixAmount = (float)subMixKnob.getValue();
+        subMixValue.setText(juce::String(subMixAmount * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    subMixKnob.onValueChange();
+
+    configureRotarySlider(envFilterKnob);
+    envFilterKnob.setRange(-1.0, 1.0, 0.01);
+    envFilterKnob.setValue(envFilterAmount);
+    addAndMakeVisible(envFilterKnob);
+    configureCaptionLabel(envFilterLabel, "Env->Filter");
+    configureValueLabel(envFilterValue);
+    envFilterKnob.onValueChange = [this]
+    {
+        envFilterAmount = (float)envFilterKnob.getValue();
+        envFilterValue.setText(juce::String(envFilterAmount, 2), juce::dontSendNotification);
+    };
+    envFilterKnob.onValueChange();
+
+    configureRotarySlider(chaosKnob);
+    chaosKnob.setRange(0.0, 1.0);
+    chaosKnob.setValue(chaosAmount);
+    addAndMakeVisible(chaosKnob);
+    configureCaptionLabel(chaosLabel, "Chaos");
+    configureValueLabel(chaosValueLabel);
+    chaosKnob.onValueChange = [this]
+    {
+        chaosAmount = (float)chaosKnob.getValue();
+        chaosValueLabel.setText(juce::String(chaosAmount * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    chaosKnob.onValueChange();
+
+    configureRotarySlider(delayKnob);
+    delayKnob.setRange(0.0, 1.0);
+    delayKnob.setValue(delayAmount);
+    addAndMakeVisible(delayKnob);
+    configureCaptionLabel(delayLabel, "Delay");
+    configureValueLabel(delayValue);
+    delayKnob.onValueChange = [this]
+    {
+        delayAmount = (float)delayKnob.getValue();
+        delayValue.setText(juce::String(delayAmount * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    delayKnob.onValueChange();
+
+    configureRotarySlider(autoPanKnob);
+    autoPanKnob.setRange(0.0, 1.0);
+    autoPanKnob.setValue(autoPanAmount);
+    addAndMakeVisible(autoPanKnob);
+    configureCaptionLabel(autoPanLabel, "Auto-Pan");
+    configureValueLabel(autoPanValue);
+    autoPanKnob.onValueChange = [this]
+    {
+        autoPanAmount = (float)autoPanKnob.getValue();
+        autoPanValue.setText(juce::String(autoPanAmount * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    autoPanKnob.onValueChange();
+
+    configureRotarySlider(glitchKnob);
+    glitchKnob.setRange(0.0, 1.0);
+    glitchKnob.setValue(glitchProbability);
+    addAndMakeVisible(glitchKnob);
+    configureCaptionLabel(glitchLabel, "Glitch");
+    configureValueLabel(glitchValue);
+    glitchKnob.onValueChange = [this]
+    {
+        glitchProbability = (float)glitchKnob.getValue();
+        glitchValue.setText(juce::String(glitchProbability * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    glitchKnob.onValueChange();
 }
 
 void MainComponent::initialiseToggle()
