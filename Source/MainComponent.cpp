@@ -1,6 +1,87 @@
 #include "MainComponent.h"
 #include <cmath>
 
+FuturisticLookAndFeel::FuturisticLookAndFeel()
+{
+    setColour(juce::Slider::thumbColourId, juce::Colour::fromRGB(180, 235, 255));
+    setColour(juce::Slider::rotarySliderFillColourId, juce::Colour::fromRGB(60, 140, 255));
+    setColour(juce::Slider::trackColourId, juce::Colour::fromRGBA(40, 110, 210, 180));
+    setColour(juce::Slider::textBoxTextColourId, juce::Colours::white);
+    setColour(juce::Label::textColourId, juce::Colours::white);
+    setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    setColour(juce::TextButton::buttonColourId, juce::Colour::fromRGB(15, 40, 70));
+    setColour(juce::TextButton::buttonOnColourId, juce::Colour::fromRGB(40, 160, 255));
+    setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    setColour(juce::TextButton::textColourOffId, juce::Colour::fromRGB(150, 200, 255));
+}
+
+void FuturisticLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
+    float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle, juce::Slider& slider)
+{
+    auto bounds = juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height).reduced(4.0f);
+    auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
+    auto centre = bounds.getCentre();
+    auto ringBounds = juce::Rectangle<float>(radius * 2.0f, radius * 2.0f).withCentre(centre);
+
+    const float hue = juce::jlimit(0.5f, 0.9f, juce::jmap(sliderPosProportional, 0.0f, 1.0f, 0.55f, 0.85f));
+    const float brightness = juce::jlimit(0.3f, 1.0f, juce::jmap(sliderPosProportional, 0.0f, 1.0f, 0.45f, 1.0f));
+    auto baseColour = juce::Colour::fromHSV(hue, 0.85f, brightness, 1.0f);
+
+    g.setColour(juce::Colours::black.withAlpha(0.7f));
+    g.fillEllipse(ringBounds);
+
+    juce::ColourGradient shellGradient(baseColour.withAlpha(0.15f), centre.x, ringBounds.getY(),
+        baseColour.withMultipliedBrightness(0.25f), centre.x, ringBounds.getBottom(), false);
+    g.setGradientFill(shellGradient);
+    g.fillEllipse(ringBounds.reduced(radius * 0.25f));
+
+    juce::Path hexagon;
+    const float hexRadius = radius * 0.7f;
+    for (int i = 0; i < 6; ++i)
+    {
+        const float angle = juce::MathConstants<float>::twoPi * (static_cast<float>(i) / 6.0f) - juce::MathConstants<float>::halfPi;
+        auto point = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * hexRadius;
+        if (i == 0)
+            hexagon.startNewSubPath(point);
+        else
+            hexagon.lineTo(point);
+    }
+    hexagon.closeSubPath();
+    g.setColour(baseColour.withAlpha(0.25f));
+    g.fillPath(hexagon);
+
+    juce::ColourGradient glowGradient(baseColour.withAlpha(0.6f), centre.x, centre.y,
+        baseColour.withAlpha(0.05f), centre.x, centre.y + radius * 1.5f, true);
+    g.setGradientFill(glowGradient);
+    g.drawEllipse(ringBounds, radius * 0.15f);
+
+    juce::Path halo;
+    halo.addEllipse(ringBounds.expanded(radius * 0.25f));
+    halo.addEllipse(ringBounds.reduced(radius * 0.05f));
+    g.setColour(baseColour.withAlpha(0.08f));
+    g.fillPath(halo, juce::AffineTransform());
+
+    const float angle = rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle);
+    auto pointerLength = radius * 0.85f;
+    auto pointerThickness = juce::jmax(1.5f, radius * 0.12f);
+    auto tip = centre + juce::Point<float>(std::cos(angle), std::sin(angle)) * pointerLength;
+
+    g.setColour(baseColour.withAlpha(0.45f));
+    g.drawLine({ centre, tip }, pointerThickness * 1.4f);
+    g.setColour(baseColour);
+    g.drawLine({ centre, tip }, pointerThickness);
+
+    g.setColour(baseColour.withAlpha(0.8f));
+    g.drawEllipse(ringBounds, 1.1f);
+}
+
+juce::Font FuturisticLookAndFeel::getLabelFont(juce::Label&)
+{
+    juce::Font font(juce::Font::getDefaultSansSerifFontName(), 12.0f, juce::Font::bold);
+    font.setExtraKerningFactor(0.08f);
+    return font;
+}
+
 namespace
 {
     constexpr int defaultWidth = 960;
@@ -20,6 +101,9 @@ namespace
 //==============================================================================
 MainComponent::MainComponent()
 {
+    setLookAndFeel(&lookAndFeel);
+    visualRandom.setSeedRandomly();
+
     setSize(defaultWidth, defaultHeight);
     setAudioChannels(0, 2);
 
@@ -48,6 +132,18 @@ MainComponent::MainComponent()
 
 MainComponent::~MainComponent()
 {
+    for (auto* slider : { &waveKnob, &gainKnob, &attackKnob, &decayKnob, &sustainKnob, &widthKnob,
+                          &pitchKnob, &cutoffKnob, &resonanceKnob, &releaseKnob, &lfoKnob,
+                          &lfoDepthKnob, &filterModKnob, &driveKnob, &crushKnob, &subMixKnob,
+                          &envFilterKnob, &chaosKnob, &delayKnob, &autoPanKnob, &glitchKnob })
+    {
+        slider->setLookAndFeel(nullptr);
+    }
+
+    audioToggle.setLookAndFeel(nullptr);
+
+    setLookAndFeel(nullptr);
+
     auto devices = juce::MidiInput::getAvailableDevices();
     for (auto& d : devices)
         deviceManager.removeMidiInputDeviceCallback(d.identifier, this);
@@ -384,36 +480,180 @@ int MainComponent::findZeroCrossingIndex(int searchSpan) const
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colours::black);
+    auto bounds = getLocalBounds().toFloat();
 
-    auto drawRect = scopeRect.isEmpty() ? getLocalBounds().reduced(24) : scopeRect;
+    juce::ColourGradient baseGradient(juce::Colour::fromRGB(5, 10, 28), bounds.getBottomLeft(),
+        juce::Colour::fromRGB(24, 0, 48), bounds.getTopRight(), false);
+    g.setGradientFill(baseGradient);
+    g.fillRect(bounds);
 
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
-    g.drawRoundedRectangle(drawRect.toFloat(), 8.0f, 1.0f);
+    juce::ColourGradient overlayGradient(juce::Colour::fromRGBA(16, 48, 88, 220), bounds.getCentreX(), bounds.getY(),
+        juce::Colour::fromRGBA(4, 8, 16, 255), bounds.getCentreX(), bounds.getBottom(), false);
+    g.setGradientFill(overlayGradient);
+    g.fillRect(bounds);
 
-    g.setColour(juce::Colours::white);
-    juce::Path p;
+    const float gridSpacing = 48.0f;
+    const float timeFactor = (float)juce::Time::getMillisecondCounter() * 0.0025f;
+    const float xOffset = std::fmod(timeFactor * 18.0f, gridSpacing);
+    g.setColour(juce::Colours::white.withAlpha(0.03f));
+    for (float x = bounds.getX() - gridSpacing + xOffset; x < bounds.getRight(); x += gridSpacing)
+        g.drawLine(x, bounds.getY(), x, bounds.getBottom(), 1.0f);
 
-    const int start = findZeroCrossingIndex(scopeBuffer.getNumSamples() / 2);
-    const int W = drawRect.getWidth();
-    const int N = scopeBuffer.getNumSamples();
-    const float H = (float)drawRect.getHeight();
-    const float Y0 = (float)drawRect.getY();
-    const int X0 = drawRect.getX();
+    const float yOffset = std::fmod(timeFactor * 10.0f, gridSpacing);
+    for (float y = bounds.getY() - gridSpacing + yOffset; y < bounds.getBottom(); y += gridSpacing)
+        g.drawLine(bounds.getX(), y, bounds.getRight(), y, 1.0f);
 
-    for (int x = 0; x < W; ++x)
+    auto scopeArea = scopeRect.toFloat();
+    if (!scopeArea.isEmpty())
     {
-        const int i = (start + x) % N;
-        const float s = scopeBuffer.getSample(0, i);
-        const float y = juce::jmap(s, -1.0f, 1.0f, Y0 + H, Y0);
-        if (x == 0) p.startNewSubPath((float)X0, y);
-        else p.lineTo((float)(X0 + x), y);
+        juce::ColourGradient scopeGradient(juce::Colour::fromRGBA(18, 42, 84, 255), scopeArea.getTopLeft(),
+            juce::Colour::fromRGBA(4, 10, 24, 255), scopeArea.getBottomRight(), false);
+        g.setGradientFill(scopeGradient);
+        g.fillRoundedRectangle(scopeArea, 16.0f);
+
+        g.setColour(juce::Colours::white.withAlpha(0.04f));
+        const float scopeSpacing = 18.0f;
+        for (float x = scopeArea.getX(); x <= scopeArea.getRight(); x += scopeSpacing)
+            g.drawLine(x, scopeArea.getY(), x, scopeArea.getBottom(), 0.5f);
+        for (float y = scopeArea.getY(); y <= scopeArea.getBottom(); y += scopeSpacing)
+            g.drawLine(scopeArea.getX(), y, scopeArea.getRight(), y, 0.5f);
+
+        g.setColour(scopeNeonColour.withAlpha(0.25f));
+        g.drawHorizontalLine((int)std::round(scopeArea.getCentreY()), scopeArea.getX(), scopeArea.getRight());
+        g.drawVerticalLine((int)std::round(scopeArea.getCentreX()), scopeArea.getY(), scopeArea.getBottom());
+
+        const float scanY = scopeArea.getY() + std::fmod(timeFactor * 120.0f, scopeArea.getHeight());
+        auto scanRect = juce::Rectangle<float>(scopeArea.getX(), scanY, scopeArea.getWidth(), 18.0f)
+            .getIntersection(scopeArea);
+        if (!scanRect.isEmpty())
+        {
+            juce::ColourGradient scanGradient(scopeNeonColour.withAlpha(0.18f), scanRect.getCentreX(), scanRect.getY(),
+                scopeNeonColour.withAlpha(0.0f), scanRect.getCentreX(), scanRect.getBottom(), false);
+            g.setGradientFill(scanGradient);
+            g.fillRect(scanRect);
+        }
+
+        if (scopeBuffer.getNumSamples() > 0)
+        {
+            juce::Path waveform;
+            const int start = findZeroCrossingIndex(scopeBuffer.getNumSamples() / 2);
+            const int width = (int)scopeArea.getWidth();
+            const int totalSamples = scopeBuffer.getNumSamples();
+            const float height = scopeArea.getHeight();
+            const float yBase = scopeArea.getY();
+            const float xBase = scopeArea.getX();
+
+            for (int x = 0; x < width; ++x)
+            {
+                const int index = (start + x) % totalSamples;
+                const float sample = scopeBuffer.getSample(0, index);
+                const float y = juce::jmap(sample, -1.0f, 1.0f, yBase + height, yBase);
+                if (x == 0)
+                    waveform.startNewSubPath(xBase, y);
+                else
+                    waveform.lineTo(xBase + (float)x, y);
+            }
+
+            g.setColour(scopeNeonColour.withAlpha(0.18f));
+            g.strokePath(waveform, juce::PathStrokeType(6.0f));
+            g.setColour(scopeNeonColour.withAlpha(0.35f));
+            g.strokePath(waveform, juce::PathStrokeType(3.6f));
+            g.setColour(scopeNeonColour);
+            g.strokePath(waveform, juce::PathStrokeType(1.8f));
+        }
+
+        if (!radialHistory.empty())
+        {
+            juce::Path radialPath;
+            auto centre = scopeArea.getCentre();
+            const float radius = juce::jmin(scopeArea.getWidth(), scopeArea.getHeight()) * 0.42f;
+            for (size_t i = 0; i < radialHistory.size(); ++i)
+            {
+                const float theta = juce::MathConstants<float>::twoPi * (static_cast<float>(i) / static_cast<float>(radialHistory.size()));
+                const float value = juce::jlimit(-1.0f, 1.0f, radialHistory[i]);
+                const float modRadius = radius * (0.55f + 0.45f * ((value + 1.0f) * 0.5f));
+                auto point = centre + juce::Point<float>(std::cos(theta), std::sin(theta)) * modRadius;
+                if (i == 0)
+                    radialPath.startNewSubPath(point);
+                else
+                    radialPath.lineTo(point);
+            }
+            radialPath.closeSubPath();
+            g.setColour(scopeNeonColour.withAlpha(0.12f));
+            g.fillPath(radialPath);
+            g.setColour(scopeNeonColour.withAlpha(0.45f));
+            g.strokePath(radialPath, juce::PathStrokeType(1.2f));
+        }
     }
-    g.strokePath(p, juce::PathStrokeType(2.f));
+
+    if (!particles.empty())
+    {
+        const double time = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        for (const auto& particle : particles)
+        {
+            auto pos = particle.centre + juce::Point<float>(std::cos(particle.angle), std::sin(particle.angle)) * particle.orbitRadius;
+            const float flicker = 0.55f + 0.45f * std::sin((float)time * particle.baseSpeed * 2.2f + particle.angle);
+            auto colour = particle.colour.interpolatedWith(scopeNeonColour, 0.35f).withAlpha(juce::jlimit(0.15f, 0.85f, flicker));
+            g.setColour(colour);
+            g.fillEllipse(juce::Rectangle<float>(particle.size, particle.size).withCentre(pos));
+            g.setColour(colour.withAlpha(0.4f));
+            g.drawEllipse(juce::Rectangle<float>(particle.size * 1.8f, particle.size * 1.8f).withCentre(pos), 1.0f);
+        }
+    }
+
+    if (!waterfallRect.isEmpty() && waterfallImage.isValid())
+    {
+        auto wfArea = waterfallRect.toFloat();
+        g.setColour(juce::Colours::black.withAlpha(0.75f));
+        g.fillRoundedRectangle(wfArea, 12.0f);
+        g.drawImageWithin(waterfallImage, waterfallRect.getX(), waterfallRect.getY(), waterfallRect.getWidth(), waterfallRect.getHeight(), juce::RectanglePlacement::stretchToFit);
+
+        g.setColour(scopeNeonColour.withAlpha(0.4f));
+        g.drawRoundedRectangle(wfArea, 12.0f, 1.6f);
+
+        if (!energyBands.empty())
+        {
+            auto barsArea = wfArea.reduced(6.0f);
+            const int numBins = static_cast<int>(energyBands.size());
+            const float barWidth = barsArea.getWidth() / static_cast<float>(numBins);
+            for (int i = 0; i < numBins; ++i)
+            {
+                const float value = juce::jlimit(0.0f, 1.0f, energyBands[(size_t)i]);
+                const float h = barsArea.getHeight() * value;
+                auto bar = juce::Rectangle<float>(barWidth * 0.6f, h)
+                    .withCentre({ barsArea.getX() + (i + 0.5f) * barWidth, barsArea.getBottom() - h * 0.5f });
+                auto colour = juce::Colour::fromHSV(juce::jmap(value, 0.0f, 1.0f, 0.55f, 0.95f), 0.9f,
+                    juce::jmap(value, 0.0f, 1.0f, 0.35f, 1.0f), juce::jlimit(0.25f, 0.85f, 0.4f + value * 0.45f));
+                g.setColour(colour.withAlpha(0.65f));
+                g.fillRoundedRectangle(bar, 2.5f);
+            }
+        }
+    }
+
+    const double frameTime = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    auto drawFrame = [&](juce::Rectangle<float> area)
+    {
+        if (area.isEmpty())
+            return;
+
+        juce::Path outline;
+        outline.addRoundedRectangle(area, 10.0f);
+        juce::Path dashed;
+        const float dashPattern[] = { 16.0f, 9.0f };
+        const float dashOffset = std::fmod((float)frameTime * 120.0f, dashPattern[0] + dashPattern[1]);
+        juce::PathStrokeType(1.6f).createDashedStroke(dashed, outline, dashPattern, 2, juce::AffineTransform(), dashOffset);
+        g.setColour(scopeNeonColour.withAlpha(0.3f));
+        g.strokePath(dashed, juce::PathStrokeType(1.6f));
+    };
+
+    drawFrame(controlStripBounds);
+    drawFrame(keyboardBounds);
 }
 
 void MainComponent::timerCallback()
 {
+    updateVisuals();
+    updateParticles();
     repaint();
 }
 
@@ -473,14 +713,29 @@ void MainComponent::resized()
         items[i].V->setBounds(x, valueY, knob, valueH);
     }
 
+    controlStripBounds = strip.toFloat().expanded(6.0f, 6.0f);
+
     int kbH = std::max(keyboardMinHeight, area.getHeight() / 5);
     auto kbArea = area.removeFromBottom(kbH);
     keyboardComponent.setBounds(kbArea);
 
     float keyW = juce::jlimit(16.0f, 40.0f, kbArea.getWidth() / 20.0f);
     keyboardComponent.setKeyWidth(keyW);
+    keyboardBounds = kbArea.toFloat().expanded(6.0f, 6.0f);
 
-    scopeRect = area.reduced(8, 8);
+    auto visualArea = area.reduced(8, 8);
+    int waterfallHeight = 0;
+    if (!visualArea.isEmpty())
+    {
+        waterfallHeight = juce::jmax(48, juce::jmin(140, visualArea.getHeight() / 3));
+        waterfallHeight = juce::jmin(waterfallHeight, visualArea.getHeight());
+    }
+    waterfallRect = waterfallHeight > 0 ? visualArea.removeFromBottom(waterfallHeight) : juce::Rectangle<int>();
+    if (waterfallRect.isEmpty())
+        waterfallImage = juce::Image();
+    scopeRect = visualArea;
+
+    initialiseParticles();
 }
 
 void MainComponent::initialiseUi()
@@ -788,6 +1043,11 @@ void MainComponent::initialiseToggle()
 {
     audioToggle.setClickingTogglesState(true);
     audioToggle.setToggleState(true, juce::dontSendNotification);
+    audioToggle.setLookAndFeel(&lookAndFeel);
+    audioToggle.setColour(juce::TextButton::buttonColourId, juce::Colour::fromRGBA(18, 48, 88, 200));
+    audioToggle.setColour(juce::TextButton::buttonOnColourId, juce::Colour::fromRGBA(60, 160, 255, 230));
+    audioToggle.setColour(juce::TextButton::textColourOffId, juce::Colour::fromRGB(180, 220, 255));
+    audioToggle.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
     audioToggle.onClick = [this]
     {
         audioEnabled = audioToggle.getToggleState();
@@ -819,11 +1079,147 @@ void MainComponent::initialiseKeyboard()
     keyboardComponent.setMidiChannel(1);
     keyboardComponent.setAvailableRange(0, 127);
 
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour::fromRGB(24, 30, 48));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour::fromRGB(8, 12, 20));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.8f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::shadowColourId, juce::Colour::fromRGBA(0, 0, 0, 160));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::upDownButtonBackgroundColourId, juce::Colour::fromRGBA(20, 60, 120, 180));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::upDownButtonArrowColourId, juce::Colours::white.withAlpha(0.8f));
+    updateKeyboardHighlight(0.0f);
+}
+
+void MainComponent::initialiseParticles()
+{
+    if (scopeRect.isEmpty())
+    {
+        particles.clear();
+        return;
+    }
+
+    particles.clear();
+
+    const int numParticles = 28;
+    auto centre = scopeRect.getCentre().toFloat();
+    const float maxRadius = juce::jmin(scopeRect.getWidth(), scopeRect.getHeight()) * 0.5f;
+
+    for (int i = 0; i < numParticles; ++i)
+    {
+        Particle particle;
+        particle.centre = centre;
+        const float t = static_cast<float>(i) / static_cast<float>(numParticles);
+        particle.baseRadius = juce::jmap(t, 0.15f, 1.0f, maxRadius * 0.2f, maxRadius);
+        particle.orbitRadius = particle.baseRadius;
+        particle.angle = visualRandom.nextFloat() * juce::MathConstants<float>::twoPi;
+        particle.baseSpeed = juce::jmap(visualRandom.nextFloat(), 0.0f, 1.0f, 0.3f, 1.2f);
+        particle.speed = particle.baseSpeed;
+        particle.baseSize = juce::jmap(visualRandom.nextFloat(), 0.0f, 1.0f, 3.2f, 6.8f);
+        particle.size = particle.baseSize;
+        particle.colour = juce::Colour::fromHSV(0.55f + 0.35f * visualRandom.nextFloat(), 0.85f, 0.9f, 1.0f);
+        particles.push_back(particle);
+    }
+}
+
+void MainComponent::updateParticles()
+{
+    if (scopeRect.isEmpty() || particles.empty())
+        return;
+
+    auto centre = scopeRect.getCentre().toFloat();
+    const float maxRadius = juce::jmin(scopeRect.getWidth(), scopeRect.getHeight()) * 0.5f;
+    const float modulation = 1.0f + lfoDepthSmoothed.getCurrentValue() * 0.6f + juce::jlimit(0.0f, 1.0f, chaosAmount) * 0.8f;
+    const float speedScale = juce::jmap(autoPanAmount, 0.0f, 1.0f, 0.7f, 1.7f);
+
+    for (auto& particle : particles)
+    {
+        particle.centre = centre;
+        particle.orbitRadius = juce::jlimit(maxRadius * 0.15f, maxRadius, particle.baseRadius * modulation);
+        particle.speed = particle.baseSpeed * speedScale + chaosAmount * 0.45f;
+        particle.angle += particle.speed * 0.02f;
+        if (particle.angle > juce::MathConstants<float>::twoPi)
+            particle.angle -= juce::MathConstants<float>::twoPi;
+        particle.size = juce::jlimit(2.0f, 10.0f, particle.baseSize * (0.8f + 0.35f * std::sin((float)juce::Time::getMillisecondCounterHiRes() * 0.002f + particle.angle)));
+    }
+}
+
+void MainComponent::updateVisuals()
+{
+    const int totalSamples = scopeBuffer.getNumSamples();
+    if (totalSamples == 0)
+        return;
+
+    const int start = findZeroCrossingIndex(totalSamples / 2);
+
+    if (!energyBands.empty())
+    {
+        const int samplesPerBand = juce::jmax(1, totalSamples / static_cast<int>(energyBands.size()));
+        for (size_t b = 0; b < energyBands.size(); ++b)
+        {
+            float sum = 0.0f;
+            for (int s = 0; s < samplesPerBand; ++s)
+            {
+                const int index = (start + static_cast<int>(b) * samplesPerBand + s) % totalSamples;
+                sum += std::abs(scopeBuffer.getSample(0, index));
+            }
+            const float average = juce::jlimit(0.0f, 1.0f, sum / (float)samplesPerBand);
+            energyBands[b] = energyBands[b] * 0.8f + average * 0.2f;
+        }
+    }
+
+    if (!radialHistory.empty())
+    {
+        const int step = juce::jmax(1, totalSamples / static_cast<int>(radialHistory.size()));
+        for (size_t i = 0; i < radialHistory.size(); ++i)
+        {
+            const int index = (start + static_cast<int>(i) * step) % totalSamples;
+            const float sample = scopeBuffer.getSample(0, index);
+            radialHistory[i] = juce::jlimit(-1.0f, 1.0f, radialHistory[i] * 0.85f + sample * 0.15f);
+        }
+    }
+
+    const float hue = juce::jlimit(0.5f, 0.95f, 0.55f + 0.25f * chaosAmount + 0.12f * autoPanAmount);
+    const float brightness = juce::jlimit(0.35f, 1.0f, 0.45f + gainSmoothed.getCurrentValue() * 0.7f + driveAmount * 0.3f);
+    auto targetColour = juce::Colour::fromHSV(hue, 0.9f, brightness, 1.0f);
+    scopeNeonColour = scopeNeonColour.interpolatedWith(targetColour, 0.18f);
+
+    if (!waterfallRect.isEmpty())
+    {
+        const int wfWidth = waterfallRect.getWidth();
+        const int wfHeight = juce::jmax(1, waterfallRect.getHeight());
+        if (wfWidth > 0 && wfHeight > 0)
+        {
+            if (!waterfallImage.isValid() || waterfallImage.getWidth() != wfWidth || waterfallImage.getHeight() != wfHeight)
+                waterfallImage = juce::Image(juce::Image::ARGB, wfWidth, wfHeight, true);
+
+            if (waterfallImage.isValid())
+            {
+                if (wfHeight > 1)
+                    waterfallImage.moveImageSection(0, 1, 0, 0, wfWidth, wfHeight - 1);
+
+                juce::Graphics wg(waterfallImage);
+                wg.setOpacity(1.0f);
+                const int bands = static_cast<int>(energyBands.size());
+                for (int x = 0; x < wfWidth; ++x)
+                {
+                    const int bandIndex = bands > 0 ? juce::jlimit(0, bands - 1, (bands * x) / juce::jmax(1, wfWidth - 1)) : 0;
+                    const float value = bands > 0 ? juce::jlimit(0.0f, 1.0f, energyBands[(size_t)bandIndex]) : 0.0f;
+                    auto colour = juce::Colour::fromHSV(juce::jmap(value, 0.0f, 1.0f, 0.55f, 0.98f), 0.85f,
+                        juce::jmap(value, 0.0f, 1.0f, 0.2f, 1.0f), juce::jlimit(0.12f, 0.85f, 0.28f + value * 0.6f));
+                    wg.setColour(colour);
+                    wg.fillRect(x, 0, 1, 1);
+                }
+            }
+        }
+    }
+}
+
+void MainComponent::updateKeyboardHighlight(float velocity)
+{
+    const float intensity = juce::jlimit(0.0f, 1.0f, velocity);
+    const float hue = juce::jmap(intensity, 0.0f, 1.0f, 0.55f, 0.95f);
+    const float brightness = juce::jmap(intensity, 0.0f, 1.0f, 0.35f, 1.0f);
+    auto colour = juce::Colour::fromHSV(hue, 0.9f, brightness, juce::jlimit(0.2f, 0.75f, 0.3f + intensity * 0.5f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, colour);
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, colour.withAlpha(0.3f));
 }
 
 void MainComponent::configureRotarySlider(juce::Slider& slider)
@@ -832,20 +1228,30 @@ void MainComponent::configureRotarySlider(juce::Slider& slider)
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
         juce::MathConstants<float>::pi * 2.8f, true);
+    slider.setLookAndFeel(&lookAndFeel);
+    slider.setMouseDragSensitivity(180);
 }
 
 void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String& text)
 {
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centred);
-    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    label.setFont(lookAndFeel.getLabelFont(label).withHeight(12.0f));
+    label.setColour(juce::Label::textColourId, juce::Colour::fromRGB(170, 220, 255));
+    label.setColour(juce::Label::backgroundColourId, juce::Colour::fromRGBA(12, 32, 72, 140));
+    label.setBorderSize(juce::BorderSize<int>(1));
+    label.setInterceptsMouseClicks(false, false);
     addAndMakeVisible(label);
 }
 
 void MainComponent::configureValueLabel(juce::Label& label)
 {
     label.setJustificationType(juce::Justification::centred);
-    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    label.setFont(lookAndFeel.getLabelFont(label).withHeight(11.0f));
+    label.setColour(juce::Label::textColourId, juce::Colour::fromRGB(120, 200, 255));
+    label.setColour(juce::Label::backgroundColourId, juce::Colour::fromRGBA(6, 18, 36, 160));
+    label.setBorderSize(juce::BorderSize<int>(1));
+    label.setInterceptsMouseClicks(false, false);
     addAndMakeVisible(label);
 }
 
@@ -871,6 +1277,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
         setTargetFrequency(midiNoteToFreq(currentMidiNote));
         midiGate = true;
         amplitudeEnvelope.noteOn();
+        updateKeyboardHighlight(currentVelocity);
     }
     else if (m.isNoteOff())
     {
@@ -880,6 +1287,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
             midiGate = false;
             currentMidiNote = -1;
             amplitudeEnvelope.noteOff();
+            updateKeyboardHighlight(0.0f);
         }
         else
         {
@@ -887,6 +1295,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
             setTargetFrequency(midiNoteToFreq(currentMidiNote));
             midiGate = true;
             amplitudeEnvelope.noteOn();
+            updateKeyboardHighlight(currentVelocity);
         }
     }
     else if (m.isAllNotesOff() || m.isAllSoundOff())
@@ -895,6 +1304,7 @@ void MainComponent::handleIncomingMidiMessage(juce::MidiInput*, const juce::Midi
         midiGate = false;
         currentMidiNote = -1;
         amplitudeEnvelope.noteOff();
+        updateKeyboardHighlight(0.0f);
     }
 }
 
@@ -906,6 +1316,7 @@ void MainComponent::handleNoteOn(juce::MidiKeyboardState*, int, int midiNoteNumb
     setTargetFrequency(midiNoteToFreq(currentMidiNote));
     midiGate = true;
     amplitudeEnvelope.noteOn();
+    updateKeyboardHighlight(currentVelocity);
 }
 
 void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNumber, float)
@@ -916,6 +1327,7 @@ void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNum
         midiGate = false;
         currentMidiNote = -1;
         amplitudeEnvelope.noteOff();
+        updateKeyboardHighlight(0.0f);
     }
     else
     {
@@ -923,5 +1335,6 @@ void MainComponent::handleNoteOff(juce::MidiKeyboardState*, int, int midiNoteNum
         setTargetFrequency(midiNoteToFreq(currentMidiNote));
         midiGate = true;
         amplitudeEnvelope.noteOn();
+        updateKeyboardHighlight(currentVelocity);
     }
 }
