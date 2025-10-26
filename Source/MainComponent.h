@@ -1,5 +1,19 @@
 #pragma once
 #include <JuceHeader.h>
+#include <array>
+#include <vector>
+
+class FuturisticLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    FuturisticLookAndFeel();
+
+    void drawRotarySlider(juce::Graphics&, int x, int y, int width, int height,
+        float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle,
+        juce::Slider&) override;
+
+    juce::Font getLabelFont(juce::Label&) override;
+};
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -139,6 +153,9 @@ private:
 
     // Scope area cache (so paint knows where to draw when keyboard steals space)
     juce::Rectangle<int> scopeRect;
+    juce::Rectangle<int> waterfallRect;
+    juce::Rectangle<float> controlStripBounds;
+    juce::Rectangle<float> keyboardBounds;
 
     // ===== Helpers =====
     void initialiseUi();
@@ -150,6 +167,10 @@ private:
     void configureCaptionLabel(juce::Label& label, const juce::String& text);
     void configureValueLabel(juce::Label& label);
     void updateAmplitudeEnvelope();
+    void updateVisuals();
+    void initialiseParticles();
+    void updateParticles();
+    void updateKeyboardHighlight(float velocity);
 
     void resetSmoothers(double sampleRate);
     void setTargetFrequency(float newFrequency, bool force = false);
@@ -169,6 +190,29 @@ private:
         // A4 = 440 Hz, MIDI 69
         return 440.0f * std::pow(2.0f, (midiNote - 69) / 12.0f);
     }
+
+    FuturisticLookAndFeel lookAndFeel;
+
+    std::array<float, 64> energyBands {};
+    std::array<float, 256> radialHistory {};
+    juce::Image waterfallImage;
+
+    struct Particle
+    {
+        juce::Point<float> centre;
+        float baseRadius = 1.0f;
+        float orbitRadius = 1.0f;
+        float angle = 0.0f;
+        float baseSpeed = 0.5f;
+        float speed = 0.5f;
+        float baseSize = 4.0f;
+        float size = 4.0f;
+        juce::Colour colour { juce::Colours::white };
+    };
+
+    std::vector<Particle> particles;
+    juce::Random visualRandom;
+    juce::Colour scopeNeonColour { juce::Colour::fromRGB(60, 200, 255) };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
