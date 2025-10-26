@@ -1,206 +1,35 @@
 #include "MainComponent.h"
 #include <cmath>
 
+namespace
+{
+    constexpr int defaultWidth = 960;
+    constexpr int defaultHeight = 600;
+    constexpr int minWidth = 720;
+    constexpr int minHeight = 420;
+    constexpr int headerBarHeight = 36;
+    constexpr int headerMargin = 16;
+    constexpr int audioButtonWidth = 96;
+    constexpr int audioButtonHeight = 28;
+    constexpr int controlStripHeight = 110;
+    constexpr int knobSize = 48;
+    constexpr int keyboardMinHeight = 60;
+    constexpr int scopeTimerHz = 60;
+}
+
 //==============================================================================
 MainComponent::MainComponent()
 {
-    setSize(960, 600);
+    setSize(defaultWidth, defaultHeight);
     setAudioChannels(0, 2);
 
     scopeBuffer.clear();
 
-    auto styleKnob = [](juce::Slider& s)
-        {
-            s.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
-            s.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
-            s.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
-                juce::MathConstants<float>::pi * 2.8f, true);
-        };
+    initialiseUi();
+    initialiseMidiInputs();
+    initialiseKeyboard();
 
-    auto styleLabel = [&](juce::Label& lbl, const juce::String& txt)
-        {
-            lbl.setText(txt, juce::dontSendNotification);
-            lbl.setJustificationType(juce::Justification::centred);
-            lbl.setColour(juce::Label::textColourId, juce::Colours::white);
-            addAndMakeVisible(lbl);
-        };
-
-    auto styleValue = [&](juce::Label& lbl)
-        {
-            lbl.setJustificationType(juce::Justification::centred);
-            lbl.setColour(juce::Label::textColourId, juce::Colours::white);
-            addAndMakeVisible(lbl);
-        };
-
-    styleKnob(waveKnob);
-    waveKnob.setRange(0.0, 1.0);
-    waveKnob.setValue(0.0);
-    addAndMakeVisible(waveKnob);
-    styleLabel(waveLabel, "Waveform");
-    styleValue(waveValue);
-    waveKnob.onValueChange = [this]
-        {
-            waveMorph = (float)waveKnob.getValue();
-            waveValue.setText(juce::String(waveMorph, 2), juce::dontSendNotification);
-        };
-
-    styleKnob(gainKnob);
-    gainKnob.setRange(0.0, 1.0);
-    gainKnob.setValue(outputGain);
-    addAndMakeVisible(gainKnob);
-    styleLabel(gainLabel, "Gain");
-    styleValue(gainValue);
-    gainKnob.onValueChange = [this]
-        {
-            outputGain = (float)gainKnob.getValue();
-            gainValue.setText(juce::String(outputGain * 100.0f, 0) + "%", juce::dontSendNotification);
-        };
-
-    styleKnob(attackKnob);
-    attackKnob.setRange(0.0, 2000.0, 1.0);
-    attackKnob.setSkewFactorFromMidPoint(40.0);
-    attackKnob.setValue(attackMs);
-    addAndMakeVisible(attackKnob);
-    styleLabel(attackLabel, "Attack");
-    styleValue(attackValue);
-    attackKnob.onValueChange = [this]
-        {
-            attackMs = (float)attackKnob.getValue();
-            attackValue.setText(juce::String(attackMs, 0) + " ms", juce::dontSendNotification);
-        };
-
-    styleKnob(widthKnob);
-    widthKnob.setRange(0.0, 2.0, 0.01);
-    widthKnob.setValue(stereoWidth);
-    addAndMakeVisible(widthKnob);
-    styleLabel(widthLabel, "Width");
-    styleValue(widthValue);
-    widthKnob.onValueChange = [this]
-        {
-            stereoWidth = (float)widthKnob.getValue();
-            widthValue.setText(juce::String(stereoWidth, 2) + "x", juce::dontSendNotification);
-        };
-
-    styleKnob(pitchKnob);
-    pitchKnob.setRange(40.0, 5000.0);
-    pitchKnob.setSkewFactorFromMidPoint(440.0);
-    pitchKnob.setValue(220.0);
-    addAndMakeVisible(pitchKnob);
-    styleLabel(pitchLabel, "Pitch");
-    styleValue(pitchValue);
-    pitchKnob.onValueChange = [this]
-        {
-            frequency = (float)pitchKnob.getValue();
-            updatePhaseDelta();
-            pitchValue.setText(juce::String(frequency, 1) + " Hz", juce::dontSendNotification);
-        };
-
-    styleKnob(cutoffKnob);
-    cutoffKnob.setRange(80.0, 10000.0, 1.0);
-    cutoffKnob.setSkewFactorFromMidPoint(1000.0);
-    cutoffKnob.setValue(cutoffHz);
-    addAndMakeVisible(cutoffKnob);
-    styleLabel(cutoffLabel, "Cutoff");
-    styleValue(cutoffValue);
-    cutoffKnob.onValueChange = [this]
-        {
-            cutoffHz = (float)cutoffKnob.getValue();
-            cutoffValue.setText(juce::String(cutoffHz, 1) + " Hz", juce::dontSendNotification);
-            updateFilterStatic();
-        };
-
-    styleKnob(resonanceKnob);
-    resonanceKnob.setRange(0.1, 10.0, 0.01);
-    resonanceKnob.setSkewFactorFromMidPoint(0.707);
-    resonanceKnob.setValue(resonanceQ);
-    addAndMakeVisible(resonanceKnob);
-    styleLabel(resonanceLabel, "Resonance (Q)");
-    styleValue(resonanceValue);
-    resonanceKnob.onValueChange = [this]
-        {
-            resonanceQ = (float)resonanceKnob.getValue();
-            if (resonanceQ < 0.1f) resonanceQ = 0.1f;
-            resonanceValue.setText(juce::String(resonanceQ, 2), juce::dontSendNotification);
-            updateFilterStatic();
-        };
-
-    styleKnob(releaseKnob);
-    releaseKnob.setRange(1.0, 4000.0, 1.0);
-    releaseKnob.setSkewFactorFromMidPoint(200.0);
-    releaseKnob.setValue(releaseMs);
-    addAndMakeVisible(releaseKnob);
-    styleLabel(releaseLabel, "Release");
-    styleValue(releaseValue);
-    releaseKnob.onValueChange = [this]
-        {
-            releaseMs = (float)releaseKnob.getValue();
-            releaseValue.setText(juce::String(releaseMs, 0) + " ms", juce::dontSendNotification);
-        };
-
-    styleKnob(lfoKnob);
-    lfoKnob.setRange(0.05, 15.0);
-    lfoKnob.setValue(lfoRateHz);
-    addAndMakeVisible(lfoKnob);
-    styleLabel(lfoLabel, "LFO Rate");
-    styleValue(lfoValue);
-    lfoKnob.onValueChange = [this]
-        {
-            lfoRateHz = (float)lfoKnob.getValue();
-            lfoValue.setText(juce::String(lfoRateHz, 2) + " Hz", juce::dontSendNotification);
-        };
-
-    styleKnob(lfoDepthKnob);
-    lfoDepthKnob.setRange(0.0, 1.0);
-    lfoDepthKnob.setValue(lfoDepth);
-    addAndMakeVisible(lfoDepthKnob);
-    styleLabel(lfoDepthLabel, "LFO Depth");
-    styleValue(lfoDepthValue);
-    lfoDepthKnob.onValueChange = [this]
-        {
-            lfoDepth = (float)lfoDepthKnob.getValue();
-            lfoDepthValue.setText(juce::String(lfoDepth, 2), juce::dontSendNotification);
-        };
-
-    styleKnob(filterModKnob);
-    filterModKnob.setRange(0.0, 1.0, 0.001);
-    filterModKnob.setValue(lfoCutModAmt);
-    addAndMakeVisible(filterModKnob);
-    styleLabel(filterModLabel, "Filter Mod");
-    styleValue(filterModValue);
-    filterModKnob.onValueChange = [this]
-        {
-            lfoCutModAmt = (float)filterModKnob.getValue();
-            filterModValue.setText(juce::String(lfoCutModAmt, 2), juce::dontSendNotification);
-        };
-
-    audioToggle.setClickingTogglesState(true);
-    audioToggle.setToggleState(true, juce::dontSendNotification);
-    audioToggle.onClick = [this]
-        {
-            audioEnabled = audioToggle.getToggleState();
-            audioToggle.setButtonText(audioEnabled ? "Audio ON" : "Audio OFF");
-        };
-    addAndMakeVisible(audioToggle);
-
-    auto devices = juce::MidiInput::getAvailableDevices();
-    for (auto& d : devices)
-    {
-        deviceManager.setMidiInputDeviceEnabled(d.identifier, true);
-        deviceManager.addMidiInputDeviceCallback(d.identifier, this);
-    }
-
-    addAndMakeVisible(keyboardComponent);
-    keyboardState.addListener(this);
-    keyboardComponent.setMidiChannel(1);
-    keyboardComponent.setAvailableRange(36, 84);
-
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
-
-    startTimerHz(60);
+    startTimerHz(scopeTimerHz);
 }
 
 MainComponent::~MainComponent()
@@ -381,18 +210,16 @@ void MainComponent::timerCallback()
 void MainComponent::resized()
 {
     // Enforce survival layout — prevents overlap
-    const int minWidth = 720;
-    const int minHeight = 420;
     if (getWidth() < minWidth || getHeight() < minHeight)
         setSize(std::max(getWidth(), minWidth), std::max(getHeight(), minHeight));
 
-    auto area = getLocalBounds().reduced(16);
+    auto area = getLocalBounds().reduced(headerMargin);
 
-    auto bar = area.removeFromTop(36);
-    audioToggle.setBounds(bar.getRight() - 100, bar.getY() + 4, 96, 28);
+    auto bar = area.removeFromTop(headerBarHeight);
+    audioToggle.setBounds(bar.getRight() - audioButtonWidth, bar.getY() + 4, audioButtonWidth, audioButtonHeight);
 
-    auto strip = area.removeFromTop(110);
-    const int knob = 48;
+    auto strip = area.removeFromTop(controlStripHeight);
+    const int knob = knobSize;
     const int numKnobs = 11;
     const int colWidth = strip.getWidth() / numKnobs;
 
@@ -425,8 +252,7 @@ void MainComponent::resized()
         items[i].V->setBounds(x, valueY, knob, valueH);
     }
 
-    const int minKbH = 60;
-    int kbH = std::max(minKbH, area.getHeight() / 5);
+    int kbH = std::max(keyboardMinHeight, area.getHeight() / 5);
     auto kbArea = area.removeFromBottom(kbH);
     keyboardComponent.setBounds(kbArea);
 
@@ -434,6 +260,227 @@ void MainComponent::resized()
     keyboardComponent.setKeyWidth(keyW);
 
     scopeRect = area.reduced(8, 8);
+}
+
+void MainComponent::initialiseUi()
+{
+    initialiseSliders();
+    initialiseToggle();
+}
+
+void MainComponent::initialiseSliders()
+{
+    configureRotarySlider(waveKnob);
+    waveKnob.setRange(0.0, 1.0);
+    waveKnob.setValue(0.0);
+    addAndMakeVisible(waveKnob);
+    configureCaptionLabel(waveLabel, "Waveform");
+    configureValueLabel(waveValue);
+    waveKnob.onValueChange = [this]
+    {
+        waveMorph = (float)waveKnob.getValue();
+        waveValue.setText(juce::String(waveMorph, 2), juce::dontSendNotification);
+    };
+    waveKnob.onValueChange();
+
+    configureRotarySlider(gainKnob);
+    gainKnob.setRange(0.0, 1.0);
+    gainKnob.setValue(outputGain);
+    addAndMakeVisible(gainKnob);
+    configureCaptionLabel(gainLabel, "Gain");
+    configureValueLabel(gainValue);
+    gainKnob.onValueChange = [this]
+    {
+        outputGain = (float)gainKnob.getValue();
+        gainValue.setText(juce::String(outputGain * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    gainKnob.onValueChange();
+
+    configureRotarySlider(attackKnob);
+    attackKnob.setRange(0.0, 2000.0, 1.0);
+    attackKnob.setSkewFactorFromMidPoint(40.0);
+    attackKnob.setValue(attackMs);
+    addAndMakeVisible(attackKnob);
+    configureCaptionLabel(attackLabel, "Attack");
+    configureValueLabel(attackValue);
+    attackKnob.onValueChange = [this]
+    {
+        attackMs = (float)attackKnob.getValue();
+        attackValue.setText(juce::String(attackMs, 0) + " ms", juce::dontSendNotification);
+    };
+    attackKnob.onValueChange();
+
+    configureRotarySlider(widthKnob);
+    widthKnob.setRange(0.0, 2.0, 0.01);
+    widthKnob.setValue(stereoWidth);
+    addAndMakeVisible(widthKnob);
+    configureCaptionLabel(widthLabel, "Width");
+    configureValueLabel(widthValue);
+    widthKnob.onValueChange = [this]
+    {
+        stereoWidth = (float)widthKnob.getValue();
+        widthValue.setText(juce::String(stereoWidth, 2) + "x", juce::dontSendNotification);
+    };
+    widthKnob.onValueChange();
+
+    configureRotarySlider(pitchKnob);
+    pitchKnob.setRange(40.0, 5000.0);
+    pitchKnob.setSkewFactorFromMidPoint(440.0);
+    pitchKnob.setValue(220.0);
+    addAndMakeVisible(pitchKnob);
+    configureCaptionLabel(pitchLabel, "Pitch");
+    configureValueLabel(pitchValue);
+    pitchKnob.onValueChange = [this]
+    {
+        frequency = (float)pitchKnob.getValue();
+        updatePhaseDelta();
+        pitchValue.setText(juce::String(frequency, 1) + " Hz", juce::dontSendNotification);
+    };
+    pitchKnob.onValueChange();
+
+    configureRotarySlider(cutoffKnob);
+    cutoffKnob.setRange(80.0, 10000.0, 1.0);
+    cutoffKnob.setSkewFactorFromMidPoint(1000.0);
+    cutoffKnob.setValue(cutoffHz);
+    addAndMakeVisible(cutoffKnob);
+    configureCaptionLabel(cutoffLabel, "Cutoff");
+    configureValueLabel(cutoffValue);
+    cutoffKnob.onValueChange = [this]
+    {
+        cutoffHz = (float)cutoffKnob.getValue();
+        cutoffValue.setText(juce::String(cutoffHz, 1) + " Hz", juce::dontSendNotification);
+        updateFilterStatic();
+    };
+    cutoffKnob.onValueChange();
+
+    configureRotarySlider(resonanceKnob);
+    resonanceKnob.setRange(0.1, 10.0, 0.01);
+    resonanceKnob.setSkewFactorFromMidPoint(0.707);
+    resonanceKnob.setValue(resonanceQ);
+    addAndMakeVisible(resonanceKnob);
+    configureCaptionLabel(resonanceLabel, "Resonance (Q)");
+    configureValueLabel(resonanceValue);
+    resonanceKnob.onValueChange = [this]
+    {
+        resonanceQ = (float)resonanceKnob.getValue();
+        if (resonanceQ < 0.1f) resonanceQ = 0.1f;
+        resonanceValue.setText(juce::String(resonanceQ, 2), juce::dontSendNotification);
+        updateFilterStatic();
+    };
+    resonanceKnob.onValueChange();
+
+    configureRotarySlider(releaseKnob);
+    releaseKnob.setRange(1.0, 4000.0, 1.0);
+    releaseKnob.setSkewFactorFromMidPoint(200.0);
+    releaseKnob.setValue(releaseMs);
+    addAndMakeVisible(releaseKnob);
+    configureCaptionLabel(releaseLabel, "Release");
+    configureValueLabel(releaseValue);
+    releaseKnob.onValueChange = [this]
+    {
+        releaseMs = (float)releaseKnob.getValue();
+        releaseValue.setText(juce::String(releaseMs, 0) + " ms", juce::dontSendNotification);
+    };
+    releaseKnob.onValueChange();
+
+    configureRotarySlider(lfoKnob);
+    lfoKnob.setRange(0.05, 15.0);
+    lfoKnob.setValue(lfoRateHz);
+    addAndMakeVisible(lfoKnob);
+    configureCaptionLabel(lfoLabel, "LFO Rate");
+    configureValueLabel(lfoValue);
+    lfoKnob.onValueChange = [this]
+    {
+        lfoRateHz = (float)lfoKnob.getValue();
+        lfoValue.setText(juce::String(lfoRateHz, 2) + " Hz", juce::dontSendNotification);
+    };
+    lfoKnob.onValueChange();
+
+    configureRotarySlider(lfoDepthKnob);
+    lfoDepthKnob.setRange(0.0, 1.0);
+    lfoDepthKnob.setValue(lfoDepth);
+    addAndMakeVisible(lfoDepthKnob);
+    configureCaptionLabel(lfoDepthLabel, "LFO Depth");
+    configureValueLabel(lfoDepthValue);
+    lfoDepthKnob.onValueChange = [this]
+    {
+        lfoDepth = (float)lfoDepthKnob.getValue();
+        lfoDepthValue.setText(juce::String(lfoDepth, 2), juce::dontSendNotification);
+    };
+    lfoDepthKnob.onValueChange();
+
+    configureRotarySlider(filterModKnob);
+    filterModKnob.setRange(0.0, 1.0, 0.001);
+    filterModKnob.setValue(lfoCutModAmt);
+    addAndMakeVisible(filterModKnob);
+    configureCaptionLabel(filterModLabel, "Filter Mod");
+    configureValueLabel(filterModValue);
+    filterModKnob.onValueChange = [this]
+    {
+        lfoCutModAmt = (float)filterModKnob.getValue();
+        filterModValue.setText(juce::String(lfoCutModAmt, 2), juce::dontSendNotification);
+    };
+    filterModKnob.onValueChange();
+}
+
+void MainComponent::initialiseToggle()
+{
+    audioToggle.setClickingTogglesState(true);
+    audioToggle.setToggleState(true, juce::dontSendNotification);
+    audioToggle.onClick = [this]
+    {
+        audioEnabled = audioToggle.getToggleState();
+        audioToggle.setButtonText(audioEnabled ? "Audio ON" : "Audio OFF");
+    };
+    audioToggle.setButtonText("Audio ON");
+    addAndMakeVisible(audioToggle);
+}
+
+void MainComponent::initialiseMidiInputs()
+{
+    auto devices = juce::MidiInput::getAvailableDevices();
+    for (auto& d : devices)
+    {
+        deviceManager.setMidiInputDeviceEnabled(d.identifier, true);
+        deviceManager.addMidiInputDeviceCallback(d.identifier, this);
+    }
+}
+
+void MainComponent::initialiseKeyboard()
+{
+    addAndMakeVisible(keyboardComponent);
+    keyboardState.addListener(this);
+    keyboardComponent.setMidiChannel(1);
+    keyboardComponent.setAvailableRange(36, 84);
+
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
+}
+
+void MainComponent::configureRotarySlider(juce::Slider& slider)
+{
+    slider.setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+    slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
+        juce::MathConstants<float>::pi * 2.8f, true);
+}
+
+void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String& text)
+{
+    label.setText(text, juce::dontSendNotification);
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(label);
+}
+
+void MainComponent::configureValueLabel(juce::Label& label)
+{
+    label.setJustificationType(juce::Justification::centred);
+    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    addAndMakeVisible(label);
 }
 
 //==============================================================================

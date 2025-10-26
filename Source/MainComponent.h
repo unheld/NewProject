@@ -93,6 +93,15 @@ private:
     juce::Rectangle<int> scopeRect;
 
     // ===== Helpers =====
+    void initialiseUi();
+    void initialiseSliders();
+    void initialiseToggle();
+    void initialiseMidiInputs();
+    void initialiseKeyboard();
+    void configureRotarySlider(juce::Slider& slider);
+    void configureCaptionLabel(juce::Label& label, const juce::String& text);
+    void configureValueLabel(juce::Label& label);
+
     void updatePhaseDelta();
     void updateFilterCoeffs(double cutoff, double Q);
     void updateFilterStatic();
