@@ -1,0 +1,19 @@
+# Visual Studio cache & build files
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.pdb
+*.cachefile
+ipch/
+*.VC.db
+
+# Build result folders
+Builds/
+Release/
+Debug/
+
+# OS cruft
+Thumbs.db
+.DS_Store
