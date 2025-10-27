@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include <algorithm>
 #include <cmath>
 
 FuturisticLookAndFeel::FuturisticLookAndFeel()
