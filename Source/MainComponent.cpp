@@ -441,17 +441,11 @@ void MainComponent::paint(juce::Graphics& g)
         auto statusArea = headerTextBounds.removeFromRight(audioToggle.getWidth() + 24);
 
         g.setColour(Theme::textSecondary.withAlpha(0.9f));
-        juce::Font titleFont;
-        titleFont.setHeight(17.0f);
-        titleFont.setBold(true);
-        g.setFont(titleFont);
+        g.setFont(juce::Font(17.0f, juce::Font::bold));
         g.drawFittedText("SPECTRAL LAB", headerTextBounds, juce::Justification::left, 1);
 
         g.setColour(audioEnabled ? Theme::accent : Theme::glitchColour.withAlpha(0.7f));
-        juce::Font statusFont;
-        statusFont.setHeight(13.0f);
-        statusFont.setBold(false);
-        g.setFont(statusFont);
+        g.setFont(juce::Font(13.0f, juce::Font::plain));
         g.drawFittedText(audioEnabled ? "AUDIO: ONLINE" : "AUDIO: STANDBY", statusArea, juce::Justification::centredRight, 1);
     }
 
@@ -956,6 +950,7 @@ void MainComponent::initialiseToggle()
     audioToggle.setColour(juce::TextButton::buttonOnColourId, Theme::accentDim.withAlpha(0.8f));
     audioToggle.setColour(juce::TextButton::textColourOnId, Theme::accent);
     audioToggle.setColour(juce::TextButton::textColourOffId, Theme::textPrimary);
+    audioToggle.setBorderSize(juce::BorderSize<int>(0));
     audioToggle.onClick = [this]
     {
         audioEnabled = audioToggle.getToggleState();
@@ -987,14 +982,13 @@ void MainComponent::initialiseKeyboard()
     keyboardComponent.setMidiChannel(1);
     keyboardComponent.setAvailableRange(0, 127);
 
-    using MidiColours = juce::MidiKeyboardComponent::ColourIds;
-    keyboardComponent.setColour(MidiColours::backgroundColourId, Theme::panelColour.darker(0.3f));
-    keyboardComponent.setColour(MidiColours::whiteNoteColourId, Theme::panelColour.brighter(0.1f));
-    keyboardComponent.setColour(MidiColours::blackNoteColourId, Theme::backgroundBottom.brighter(0.15f));
-    keyboardComponent.setColour(MidiColours::keySeparatorLineColourId, Theme::accentDim.withAlpha(0.4f));
-    keyboardComponent.setColour(MidiColours::textLabelColourId, Theme::textSecondary.withAlpha(0.8f));
-    keyboardComponent.setColour(MidiColours::mouseOverKeyOverlayColourId, Theme::accentDim.withAlpha(0.2f));
-    keyboardComponent.setColour(MidiColours::keyDownOverlayColourId, Theme::accentDim.withAlpha(0.45f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::backgroundColourId, Theme::panelColour.darker(0.3f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, Theme::panelColour.brighter(0.1f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, Theme::backgroundBottom.brighter(0.15f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, Theme::accentDim.withAlpha(0.4f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::textLabelColourId, Theme::textSecondary.withAlpha(0.8f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, Theme::accentDim.withAlpha(0.2f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, Theme::accentDim.withAlpha(0.45f));
 }
 
 void MainComponent::configureRotarySlider(juce::Slider& slider)
@@ -1014,10 +1008,7 @@ void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String
 {
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centred);
-    juce::Font captionFont;
-    captionFont.setHeight(12.0f);
-    captionFont.setBold(true);
-    label.setFont(captionFont);
+    label.setFont(juce::Font(12.0f, juce::Font::bold));
     label.setColour(juce::Label::textColourId, Theme::textSecondary);
     addAndMakeVisible(label);
 }
@@ -1025,10 +1016,7 @@ void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String
 void MainComponent::configureValueLabel(juce::Label& label)
 {
     label.setJustificationType(juce::Justification::centred);
-    juce::Font valueFont;
-    valueFont.setHeight(13.0f);
-    valueFont.setBold(false);
-    label.setFont(valueFont);
+    label.setFont(juce::Font(13.0f, juce::Font::plain));
     label.setColour(juce::Label::textColourId, Theme::textPrimary);
     addAndMakeVisible(label);
 }
