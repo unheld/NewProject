@@ -18,7 +18,6 @@ FuturisticLookAndFeel::FuturisticLookAndFeel()
 void FuturisticLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, int width, int height,
     float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle, juce::Slider& slider)
 {
-    juce::ignoreUnused(slider);
     auto bounds = juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height).reduced(4.0f);
     auto radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
     auto centre = bounds.getCentre();
@@ -78,7 +77,7 @@ void FuturisticLookAndFeel::drawRotarySlider(juce::Graphics& g, int x, int y, in
 
 juce::Font FuturisticLookAndFeel::getLabelFont(juce::Label&)
 {
-    juce::Font font(juce::FontOptions(juce::Font::getDefaultSansSerifFontName(), 12.0f, juce::Font::bold));
+    juce::Font font(juce::Font::getDefaultSansSerifFontName(), 12.0f, juce::Font::bold);
     font.setExtraKerningFactor(0.08f);
     return font;
 }
@@ -525,14 +524,11 @@ void MainComponent::paint(juce::Graphics& g)
 
         const float scanY = scopeArea.getY() + std::fmod(timeFactor * 120.0f, scopeArea.getHeight());
         auto scanRect = juce::Rectangle<float>(scopeArea.getX(), scanY, scopeArea.getWidth(), 18.0f)
-            .getIntersection(scopeArea);
-        if (!scanRect.isEmpty())
-        {
-            juce::ColourGradient scanGradient(scopeNeonColour.withAlpha(0.18f), scanRect.getCentreX(), scanRect.getY(),
-                scopeNeonColour.withAlpha(0.0f), scanRect.getCentreX(), scanRect.getBottom(), false);
-            g.setGradientFill(scanGradient);
-            g.fillRect(scanRect);
-        }
+            .intersected(scopeArea);
+        juce::ColourGradient scanGradient(scopeNeonColour.withAlpha(0.18f), scanRect.getCentreX(), scanRect.getY(),
+            scopeNeonColour.withAlpha(0.0f), scanRect.getCentreX(), scanRect.getBottom(), false);
+        g.setGradientFill(scanGradient);
+        g.fillRect(scanRect);
 
         if (scopeBuffer.getNumSamples() > 0)
         {
@@ -642,8 +638,7 @@ void MainComponent::paint(juce::Graphics& g)
         juce::Path dashed;
         const float dashPattern[] = { 16.0f, 9.0f };
         const float dashOffset = std::fmod((float)frameTime * 120.0f, dashPattern[0] + dashPattern[1]);
-        juce::PathStrokeType stroke(1.6f);
-        stroke.createDashedStroke(dashed, outline, dashPattern, 2, juce::AffineTransform(), dashOffset);
+        juce::PathStrokeType(1.6f).createDashedStroke(dashed, outline, dashPattern, 2, dashOffset);
         g.setColour(scopeNeonColour.withAlpha(0.3f));
         g.strokePath(dashed, juce::PathStrokeType(1.6f));
     };
@@ -1084,6 +1079,7 @@ void MainComponent::initialiseKeyboard()
     keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour::fromRGB(8, 12, 20));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.8f));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::shadowColourId, juce::Colour::fromRGBA(0, 0, 0, 160));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::backgroundColourId, juce::Colour::fromRGB(10, 12, 24));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::upDownButtonBackgroundColourId, juce::Colour::fromRGBA(20, 60, 120, 180));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::upDownButtonArrowColourId, juce::Colours::white.withAlpha(0.8f));
     updateKeyboardHighlight(0.0f);
