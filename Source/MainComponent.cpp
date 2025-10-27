@@ -13,7 +13,7 @@ namespace
     constexpr int audioButtonHeight = 28;
     constexpr int controlStripHeight = 110;
     constexpr int knobSize = 48;
-    constexpr int totalControlKnobs = 21;
+    constexpr int totalControlKnobs = 22;
     constexpr int keyboardMinHeight = 60;
     constexpr int scopeTimerHz = 60;
 
@@ -59,6 +59,14 @@ MainComponent::MainComponent()
     stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
     lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
     driveSmoothed.setCurrentAndTargetValue(driveAmount);
+    chorusMixSmoothed.setCurrentAndTargetValue(chorusMix);
+
+    chorus.setMix(1.0f);
+    chorus.setRate(0.35f);
+    chorus.setDepth(0.45f);
+    chorus.setFeedback(0.12f);
+    chorus.setCentreDelay(7.5f);
+    chorus.setSpread(0.7f);
 
     initialiseUi();
     initialiseMidiInputs();
@@ -78,7 +86,7 @@ MainComponent::~MainComponent()
 }
 
 //==============================================================================
-void MainComponent::prepareToPlay(int, double sampleRate)
+void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     currentSR = sampleRate;
     phase = 0.0f;
@@ -105,6 +113,13 @@ void MainComponent::prepareToPlay(int, double sampleRate)
     delayBuffer.setSize(2, maxDelaySamples);
     delayBuffer.clear();
     delayWritePosition = 0;
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = (juce::uint32)juce::jmax(1, samplesPerBlockExpected);
+    spec.numChannels = 2;
+    chorus.reset();
+    chorus.prepare(spec);
 }
 
 void MainComponent::updateFilterCoeffs(double cutoff, double Q)
@@ -149,6 +164,7 @@ void MainComponent::resetSmoothers(double sampleRate)
     stereoWidthSmoothed.reset(sampleRate, spatialRampSeconds);
     lfoDepthSmoothed.reset(sampleRate, spatialRampSeconds);
     driveSmoothed.reset(sampleRate, fastRampSeconds);
+    chorusMixSmoothed.reset(sampleRate, spatialRampSeconds);
 
     frequencySmoothed.setCurrentAndTargetValue(targetFrequency);
     gainSmoothed.setCurrentAndTargetValue(outputGain);
@@ -157,6 +173,7 @@ void MainComponent::resetSmoothers(double sampleRate)
     stereoWidthSmoothed.setCurrentAndTargetValue(stereoWidth);
     lfoDepthSmoothed.setCurrentAndTargetValue(lfoDepth);
     driveSmoothed.setCurrentAndTargetValue(driveAmount);
+    chorusMixSmoothed.setCurrentAndTargetValue(chorusMix);
 
     filterL.reset();
     filterR.reset();
@@ -327,6 +344,17 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& buffer
         float dryL = mid + side;
         float dryR = r ? (mid - side) : dryL;
 
+        float chorusMixValue = chorusMixSmoothed.getNextValue();
+        float chorusWetL = chorus.processSample(0, dryL);
+        float chorusWetR = chorus.processSample(1, dryR);
+        if (!r)
+            chorusWetR = chorusWetL;
+        if (chorusMixValue > 0.0001f)
+        {
+            dryL = juce::jmap(chorusMixValue, dryL, chorusWetL);
+            dryR = juce::jmap(chorusMixValue, dryR, chorusWetR);
+        }
+
         float wetL = 0.0f;
         float wetR = 0.0f;
         if (delayAmtLocal > 0.0f && maxDelaySamples > 1)
@@ -384,6 +412,7 @@ void MainComponent::releaseResources()
     filterL.reset();
     filterR.reset();
     amplitudeEnvelope.reset();
+    chorus.reset();
 }
 
 int MainComponent::findZeroCrossingIndex(int searchSpan) const
@@ -614,15 +643,16 @@ void MainComponent::resized()
         { &envFilterLabel, &envFilterKnob, &envFilterValue }, // 16
         { &chaosLabel, &chaosKnob, &chaosValueLabel }, // 17
         { &delayLabel, &delayKnob, &delayValue },   // 18
-        { &autoPanLabel, &autoPanKnob, &autoPanValue }, // 19
-        { &glitchLabel, &glitchKnob, &glitchValue } // 20
+        { &chorusLabel, &chorusKnob, &chorusValue }, // 19
+        { &autoPanLabel, &autoPanKnob, &autoPanValue }, // 20
+        { &glitchLabel, &glitchKnob, &glitchValue } // 21
     };
 
     // Index lists per group (match your chosen mapping)
     const int oscIdx[]   = { 0, 15, 1, 6 };                // Waveform, Sub Mix, Gain, Pitch
     const int filtIdx[]  = { 7, 8, 12 };                   // Cutoff, Resonance, Filter Mod
     const int adsrIdx[]  = { 2, 3, 4, 9 };                 // Attack, Decay, Sustain, Release
-    const int fxIdx[]    = { 16, 13, 14, 18, 5, 19, 17, 20, 10, 11 }; // Env->Filter, Drive, Crush, Delay, Width, Auto-Pan, Chaos, Glitch, LFO Rate, LFO Depth
+    const int fxIdx[]    = { 16, 13, 14, 18, 19, 5, 20, 17, 21, 10, 11 }; // Env->Filter, Drive, Crush, Delay, Chorus, Width, Auto-Pan, Chaos, Glitch, LFO Rate, LFO Depth
 
     const int grpCount = 4;
     const int grpSizes[grpCount] = { (int)std::size(oscIdx), (int)std::size(filtIdx), (int)std::size(adsrIdx), (int)std::size(fxIdx) };
@@ -953,6 +983,20 @@ void MainComponent::initialiseSliders()
         delayValue.setText(juce::String(delayAmount * 100.0f, 0) + "%", juce::dontSendNotification);
     };
     delayKnob.onValueChange();
+
+    configureRotarySlider(chorusKnob);
+    chorusKnob.setRange(0.0, 1.0);
+    chorusKnob.setValue(chorusMix);
+    addAndMakeVisible(chorusKnob);
+    configureCaptionLabel(chorusLabel, "Chorus");
+    configureValueLabel(chorusValue);
+    chorusKnob.onValueChange = [this]
+    {
+        chorusMix = (float)chorusKnob.getValue();
+        chorusMixSmoothed.setTargetValue(chorusMix);
+        chorusValue.setText(juce::String(chorusMix * 100.0f, 0) + "%", juce::dontSendNotification);
+    };
+    chorusKnob.onValueChange();
 
     configureRotarySlider(autoPanKnob);
     autoPanKnob.setRange(0.0, 1.0);

@@ -10,7 +10,7 @@ public:
     MainComponent();
     ~MainComponent() override;
 
-    void prepareToPlay(int, double) override;
+    void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo&) override;
     void releaseResources() override;
 
@@ -40,6 +40,7 @@ private:
     juce::SmoothedValue<float> stereoWidthSmoothed;
     juce::SmoothedValue<float> lfoDepthSmoothed;
     juce::SmoothedValue<float> driveSmoothed;
+    juce::SmoothedValue<float> chorusMixSmoothed;
 
     // Output Gain
     float   outputGain = 0.5f;
@@ -50,6 +51,7 @@ private:
     float   chaosAmount = 0.0f;
     float   delayAmount = 0.0f;
     float   autoPanAmount = 0.0f;
+    float   chorusMix = 0.35f;
     float   glitchProbability = 0.0f;
 
     // Filter (cutoff + resonance + per-channel IIR)
@@ -89,6 +91,7 @@ private:
     float crushHoldL = 0.0f;
     float crushHoldR = 0.0f;
     juce::AudioBuffer<float> delayBuffer{ 2, 1 };
+    juce::dsp::Chorus<float> chorus;
     int delayWritePosition = 0;
     int maxDelaySamples = 1;
     int glitchSamplesRemaining = 0;
@@ -100,7 +103,7 @@ private:
     juce::Slider pitchKnob, cutoffKnob, resonanceKnob, releaseKnob;
     juce::Slider lfoKnob, lfoDepthKnob, filterModKnob;
     juce::Slider driveKnob, crushKnob, subMixKnob, envFilterKnob;
-    juce::Slider chaosKnob, delayKnob, autoPanKnob, glitchKnob;
+    juce::Slider chaosKnob, delayKnob, chorusKnob, autoPanKnob, glitchKnob;
 
     juce::Label waveLabel, waveValue;
     juce::Label gainLabel, gainValue;
@@ -121,6 +124,7 @@ private:
     juce::Label envFilterLabel, envFilterValue;
     juce::Label chaosLabel, chaosValueLabel;
     juce::Label delayLabel, delayValue;
+    juce::Label chorusLabel, chorusValue;
     juce::Label autoPanLabel, autoPanValue;
     juce::Label glitchLabel, glitchValue;
 
