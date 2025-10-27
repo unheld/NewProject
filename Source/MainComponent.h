@@ -139,6 +139,12 @@ private:
 
     // Scope area cache (so paint knows where to draw when keyboard steals space)
     juce::Rectangle<int> scopeRect;
+    juce::Rectangle<int> headerRect;
+    juce::Rectangle<int> controlStripRect;
+    juce::Rectangle<int> keyboardRect;
+
+    float scanProgress = 0.0f;
+    juce::Random visualRandom;
 
     // ===== Helpers =====
     void initialiseUi();
