@@ -208,7 +208,12 @@ MainComponent::~MainComponent()
 //==============================================================================
 void MainComponent::prepareToPlay(int, double sampleRate)
 {
-    currentSR = sampleRate;
+    const double safeSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+
+    if (sampleRate <= 0.0)
+        jassertfalse;
+
+    currentSR = safeSampleRate;
     phase = 0.0f;
     lfoPhase = 0.0f;
     scopeWritePos = 0;
@@ -223,13 +228,13 @@ void MainComponent::prepareToPlay(int, double sampleRate)
     chaosSamplesRemaining = 0;
     glitchSamplesRemaining = 0;
     glitchHeldL = glitchHeldR = 0.0f;
-    resetSmoothers(sampleRate);
+    resetSmoothers(safeSampleRate);
     updateFilterStatic();
-    amplitudeEnvelope.setSampleRate(sampleRate);
+    amplitudeEnvelope.setSampleRate(safeSampleRate);
     updateAmplitudeEnvelope();
     amplitudeEnvelope.reset();
 
-    maxDelaySamples = juce::jmax(1, (int)std::ceil(sampleRate * 2.0));
+    maxDelaySamples = juce::jmax(1, (int)std::ceil(safeSampleRate * 2.0));
     delayBuffer.setSize(2, maxDelaySamples);
     delayBuffer.clear();
     delayWritePosition = 0;
@@ -319,6 +324,9 @@ inline float MainComponent::renderMorphSample(float ph, float morph) const
 void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill)
 {
     if (bufferToFill.buffer == nullptr || bufferToFill.buffer->getNumChannels() == 0)
+        return;
+
+    if (currentSR <= 0.0)
         return;
 
     bufferToFill.buffer->clear(bufferToFill.startSample, bufferToFill.numSamples);
