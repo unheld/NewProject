@@ -551,6 +551,48 @@ void MainComponent::paint(juce::Graphics& g)
     g.setGradientFill(auroraGradient);
     g.fillRect(bounds);
 
+    const float hueShift = juce::jlimit(0.55f, 0.8f, 0.62f + 0.1f * std::sin(time * 0.12f + energy * 1.4f));
+    const float horizonBrightness = juce::jlimit(0.3f, 0.7f, 0.35f + 0.25f * pulse + driveAmount * 0.25f);
+    auto horizonColour = juce::Colour::fromHSV(hueShift, 0.85f, horizonBrightness, 1.0f);
+
+    juce::Rectangle<float> horizonRect(bounds.getX(), bounds.getBottom() - bounds.getHeight() * 0.45f,
+        bounds.getWidth(), bounds.getHeight() * 0.45f);
+    juce::ColourGradient horizonGradient(horizonColour.withAlpha(0.4f), horizonRect.getCentreX(), horizonRect.getY(),
+        horizonColour.withAlpha(0.0f), horizonRect.getCentreX(), horizonRect.getBottom(), false);
+    horizonGradient.addColour(0.55, horizonColour.withMultipliedBrightness(1.35f).withAlpha(0.25f));
+    g.setGradientFill(horizonGradient);
+    g.fillRect(horizonRect);
+
+    juce::Rectangle<float> headerGlow(bounds.getX(), bounds.getY(), bounds.getWidth(), (float)headerBarHeight * 2.2f);
+    juce::ColourGradient headerGradient(scopeNeonColour.withAlpha(0.15f), headerGlow.getCentreX(), headerGlow.getY(),
+        scopeNeonColour.withAlpha(0.0f), headerGlow.getCentreX(), headerGlow.getBottom(), false);
+    headerGradient.addColour(0.45, scopeNeonColour.withMultipliedBrightness(2.4f).withAlpha(0.08f));
+    g.setGradientFill(headerGradient);
+    g.fillRect(headerGlow);
+
+    juce::Path auroraSweep;
+    const float sweepPhase = std::fmod(time * 0.22f + chaosAmount * 0.35f, 1.0f);
+    const float sweepY = bounds.getY() + bounds.getHeight() * juce::jmap(sweepPhase, 0.0f, 1.0f, 0.18f, 0.45f);
+    auto sweepStart = juce::Point<float>(bounds.getX() - bounds.getWidth() * 0.15f, sweepY);
+    auto sweepControl = juce::Point<float>(bounds.getCentreX(), sweepY - bounds.getHeight() * 0.18f);
+    auto sweepEnd = juce::Point<float>(bounds.getRight() + bounds.getWidth() * 0.15f, sweepY + bounds.getHeight() * 0.08f);
+    auroraSweep.startNewSubPath(sweepStart);
+    auroraSweep.quadraticTo(sweepControl, sweepEnd);
+    juce::ColourGradient auroraSweepGradient(
+        horizonColour.withAlpha(0.14f), sweepStart.x, sweepStart.y,
+        horizonColour.withRotatedHue(0.08f).withMultipliedBrightness(1.5f).withAlpha(0.0f), sweepEnd.x, sweepEnd.y, false);
+    g.setGradientFill(auroraSweepGradient);
+    g.strokePath(auroraSweep, juce::PathStrokeType(22.0f));
+
+    juce::Path sweepHighlight;
+    sweepHighlight.startNewSubPath(sweepStart);
+    sweepHighlight.quadraticTo(sweepControl.translated(0.0f, -bounds.getHeight() * 0.04f), sweepEnd);
+    juce::ColourGradient sweepHighlightGradient(
+        scopeNeonColour.withAlpha(0.12f), sweepStart.x, sweepStart.y,
+        scopeNeonColour.withAlpha(0.0f), sweepEnd.x, sweepEnd.y, false);
+    g.setGradientFill(sweepHighlightGradient);
+    g.strokePath(sweepHighlight, juce::PathStrokeType(4.0f));
+
     const float pulseAlpha = juce::jlimit(0.05f, 0.25f, 0.08f + 0.12f * pulse + chaosAmount * 0.1f);
     auto pulseColour = scopeNeonColour.withMultipliedBrightness(1.2f).withAlpha(pulseAlpha);
     juce::Rectangle<float> pulseEllipse = bounds.reduced(bounds.getWidth() * 0.12f, bounds.getHeight() * 0.18f);
@@ -582,6 +624,22 @@ void MainComponent::paint(juce::Graphics& g)
             scopeNeonColour.withAlpha(0.0f), scopeArea.getCentreX(), scopeArea.getBottom(), true);
         g.setGradientFill(energyPulseGradient);
         g.fillEllipse(scopeArea.reduced(scopeArea.getWidth() * 0.18f, scopeArea.getHeight() * 0.18f));
+
+        juce::Path scopeHighlight;
+        scopeHighlight.addRoundedRectangle(scopeArea.reduced(3.0f, 4.0f), 12.0f);
+        const auto scopeTopLeft = scopeArea.getTopLeft();
+        const auto scopeBottomLeft = scopeArea.getBottomLeft();
+        juce::ColourGradient scopeHighlightGradient(
+            juce::Colours::white.withAlpha(0.12f), scopeTopLeft.x, scopeTopLeft.y,
+            juce::Colours::white.withAlpha(0.0f), scopeBottomLeft.x, scopeBottomLeft.y, false);
+        g.setGradientFill(scopeHighlightGradient);
+        g.fillPath(scopeHighlight);
+
+        juce::ColourGradient scopeOutlineGradient(
+            juce::Colours::white.withAlpha(0.06f), scopeArea.getCentreX(), scopeArea.getY() + scopeArea.getHeight() * 0.12f,
+            juce::Colours::transparentWhite, scopeArea.getCentreX(), scopeArea.getBottom(), false);
+        g.setGradientFill(scopeOutlineGradient);
+        g.drawRoundedRectangle(scopeArea.reduced(1.0f), 16.0f, 1.2f);
 
         g.setColour(juce::Colours::white.withAlpha(0.04f));
         const float scopeSpacing = 18.0f;
@@ -705,8 +763,21 @@ void MainComponent::paint(juce::Graphics& g)
         g.fillRoundedRectangle(wfArea, 12.0f);
         g.drawImageWithin(waterfallImage, waterfallRect.getX(), waterfallRect.getY(), waterfallRect.getWidth(), waterfallRect.getHeight(), juce::RectanglePlacement::stretchToFit);
 
-        g.setColour(scopeNeonColour.withAlpha(0.4f));
+        juce::ColourGradient waterfallFrameGradient(
+            scopeNeonColour.withAlpha(0.32f), wfArea.getCentreX(), wfArea.getY(),
+            scopeNeonColour.withAlpha(0.0f), wfArea.getCentreX(), wfArea.getBottom(), false);
+        g.setGradientFill(waterfallFrameGradient);
         g.drawRoundedRectangle(wfArea, 12.0f, 1.6f);
+
+        juce::Path wfHighlight;
+        wfHighlight.addRoundedRectangle(wfArea.reduced(4.0f, 2.0f), 9.0f);
+        const auto waterfallTopLeft = wfArea.getTopLeft();
+        const auto waterfallBottomLeft = wfArea.getBottomLeft();
+        juce::ColourGradient waterfallHighlightGradient(
+            juce::Colours::white.withAlpha(0.1f), waterfallTopLeft.x, waterfallTopLeft.y,
+            juce::Colours::transparentWhite, waterfallBottomLeft.x, waterfallBottomLeft.y, false);
+        g.setGradientFill(waterfallHighlightGradient);
+        g.strokePath(wfHighlight, juce::PathStrokeType(1.1f));
 
         if (!energyBands.empty())
         {
