@@ -13,6 +13,7 @@ public:
         juce::Slider&) override;
 
     juce::Font getLabelFont(juce::Label&) override;
+    void drawLabel(juce::Graphics&, juce::Label&) override;
 };
 
 class MainComponent : public juce::AudioAppComponent,
@@ -171,6 +172,13 @@ private:
     void initialiseParticles();
     void updateParticles();
     void updateKeyboardHighlight(float velocity);
+    void renderWaveformGlow(juce::Graphics& g, const juce::Path& waveform, juce::Rectangle<float> scopeArea);
+    static void applyGaussianBlur(juce::Image& image, int radius, int iterations);
+    void drawBackground(juce::Graphics& g, juce::Rectangle<float> bounds, float pulse);
+    void drawScope(juce::Graphics& g, juce::Rectangle<float> scopeArea, float timeSeconds, float pulse);
+    void drawParticles(juce::Graphics& g, double timeSeconds) const;
+    void drawWaterfall(juce::Graphics& g) const;
+    void drawModuleFrame(juce::Graphics& g, juce::Rectangle<float> area, double frameTime, float pulse) const;
 
     void resetSmoothers(double sampleRate);
     void setTargetFrequency(float newFrequency, bool force = false);
@@ -196,6 +204,7 @@ private:
     std::array<float, 64> energyBands {};
     std::array<float, 256> radialHistory {};
     juce::Image waterfallImage;
+    juce::Image scopeGlowImage;
 
     struct Particle
     {
@@ -208,6 +217,7 @@ private:
         float baseSize = 4.0f;
         float size = 4.0f;
         juce::Colour colour { juce::Colours::white };
+        juce::Colour baseColour { juce::Colours::white };
     };
 
     std::vector<Particle> particles;
