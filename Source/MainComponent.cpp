@@ -441,11 +441,11 @@ void MainComponent::paint(juce::Graphics& g)
         auto statusArea = headerTextBounds.removeFromRight(audioToggle.getWidth() + 24);
 
         g.setColour(Theme::textSecondary.withAlpha(0.9f));
-        g.setFont(juce::Font(17.0f, juce::Font::bold));
+        g.setFont(juce::FontOptions(17.0f).withStyle("Bold"));
         g.drawFittedText("SPECTRAL LAB", headerTextBounds, juce::Justification::left, 1);
 
         g.setColour(audioEnabled ? Theme::accent : Theme::glitchColour.withAlpha(0.7f));
-        g.setFont(juce::Font(13.0f, juce::Font::plain));
+        g.setFont(juce::FontOptions(13.0f).withStyle("Regular"));
         g.drawFittedText(audioEnabled ? "AUDIO: ONLINE" : "AUDIO: STANDBY", statusArea, juce::Justification::centredRight, 1);
     }
 
@@ -587,49 +587,87 @@ void MainComponent::resized()
 
     auto strip = area.removeFromTop(controlStripHeight);
     controlStripRect = strip;
-    const int knob = knobSize;
-    const int numKnobs = totalControlKnobs;
-    const int colWidth = strip.getWidth() / numKnobs;
 
+    // ---- Grouped layout: OSC | FILTER | ADSR | FX ----
+    const int groupGap = 18;
+    const int knob = knobSize;
+
+    // Items array in canonical parameter order
     struct Item { juce::Label* L; juce::Slider* S; juce::Label* V; };
-    Item items[numKnobs] = {
-        { &waveLabel, &waveKnob, &waveValue },
-        { &gainLabel, &gainKnob, &gainValue },
-        { &attackLabel, &attackKnob, &attackValue },
-        { &decayLabel, &decayKnob, &decayValue },
-        { &sustainLabel, &sustainKnob, &sustainValue },
-        { &widthLabel, &widthKnob, &widthValue },
-        { &pitchLabel, &pitchKnob, &pitchValue },
-        { &cutoffLabel, &cutoffKnob, &cutoffValue },
-        { &resonanceLabel, &resonanceKnob, &resonanceValue },
-        { &releaseLabel, &releaseKnob, &releaseValue },
-        { &lfoLabel, &lfoKnob, &lfoValue },
-        { &lfoDepthLabel, &lfoDepthKnob, &lfoDepthValue },
-        { &filterModLabel, &filterModKnob, &filterModValue },
-        { &driveLabel, &driveKnob, &driveValue },
-        { &crushLabel, &crushKnob, &crushValue },
-        { &subMixLabel, &subMixKnob, &subMixValue },
-        { &envFilterLabel, &envFilterKnob, &envFilterValue },
-        { &chaosLabel, &chaosKnob, &chaosValueLabel },
-        { &delayLabel, &delayKnob, &delayValue },
-        { &autoPanLabel, &autoPanKnob, &autoPanValue },
-        { &glitchLabel, &glitchKnob, &glitchValue }
+    Item items[totalControlKnobs] = {
+        { &waveLabel, &waveKnob, &waveValue },      // 0
+        { &gainLabel, &gainKnob, &gainValue },      // 1
+        { &attackLabel, &attackKnob, &attackValue },// 2
+        { &decayLabel, &decayKnob, &decayValue },   // 3
+        { &sustainLabel, &sustainKnob, &sustainValue }, // 4
+        { &widthLabel, &widthKnob, &widthValue },   // 5
+        { &pitchLabel, &pitchKnob, &pitchValue },   // 6
+        { &cutoffLabel, &cutoffKnob, &cutoffValue },// 7
+        { &resonanceLabel, &resonanceKnob, &resonanceValue }, // 8
+        { &releaseLabel, &releaseKnob, &releaseValue }, // 9
+        { &lfoLabel, &lfoKnob, &lfoValue },         // 10
+        { &lfoDepthLabel, &lfoDepthKnob, &lfoDepthValue }, // 11
+        { &filterModLabel, &filterModKnob, &filterModValue }, // 12
+        { &driveLabel, &driveKnob, &driveValue },   // 13
+        { &crushLabel, &crushKnob, &crushValue },   // 14
+        { &subMixLabel, &subMixKnob, &subMixValue },// 15
+        { &envFilterLabel, &envFilterKnob, &envFilterValue }, // 16
+        { &chaosLabel, &chaosKnob, &chaosValueLabel }, // 17
+        { &delayLabel, &delayKnob, &delayValue },   // 18
+        { &autoPanLabel, &autoPanKnob, &autoPanValue }, // 19
+        { &glitchLabel, &glitchKnob, &glitchValue } // 20
     };
 
-    const int labelH = 14;
-    const int valueH = 14;
-    const int labelY = strip.getY();
-    const int knobY = labelY + labelH + 2;
-    const int valueY = knobY + knob + 2;
+    // Index lists per group (match your chosen mapping)
+    const int oscIdx[]   = { 0, 15, 1, 6 };                // Waveform, Sub Mix, Gain, Pitch
+    const int filtIdx[]  = { 7, 8, 12 };                   // Cutoff, Resonance, Filter Mod
+    const int adsrIdx[]  = { 2, 3, 4, 9 };                 // Attack, Decay, Sustain, Release
+    const int fxIdx[]    = { 16, 13, 14, 18, 5, 19, 17, 20, 10, 11 }; // Env->Filter, Drive, Crush, Delay, Width, Auto-Pan, Chaos, Glitch, LFO Rate, LFO Depth
 
-    for (int i = 0; i < numKnobs; ++i)
+    const int grpCount = 4;
+    const int grpSizes[grpCount] = { (int)std::size(oscIdx), (int)std::size(filtIdx), (int)std::size(adsrIdx), (int)std::size(fxIdx) };
+    const int totalDisplayed = grpSizes[0] + grpSizes[1] + grpSizes[2] + grpSizes[3];
+
+    // Auto "scroll when needed": if unit width is too small to fit knob, we'll clamp knob draw width but maintain spacing
+    const int innerW = strip.getWidth() - groupGap * (grpCount - 1);
+    const float unitW = innerW > 0 ? (float)innerW / (float)totalDisplayed : 0.0f;
+    const int effectiveKnob = (unitW < knob + 6.0f) ? (int)std::max(24.0f, unitW - 6.0f) : knob; // shrink if tiny
+
+    // Vertical alignment trio
+    const int labelHeight = 14;
+    const int valueHeight = 14;
+    const int stripHeight = strip.getHeight();
+    const int verticalPadding = 6;
+    const int groupHeight = labelHeight + effectiveKnob + valueHeight + verticalPadding * 2;
+    const int offsetY = strip.getY() + (stripHeight - groupHeight) / 2;
+    const int labelY = offsetY;
+    const int knobY  = labelY + labelHeight + verticalPadding;
+    const int valueY = knobY + effectiveKnob + verticalPadding;
+
+    auto placeGroup = [&](const int* idxList, int count, int gi, int colOffset)
     {
-        const int x = strip.getX() + i * colWidth + (colWidth - knob) / 2;
-        items[i].L->setBounds(x, labelY, knob, labelH);
-        items[i].S->setBounds(x, knobY, knob, knob);
-        items[i].V->setBounds(x, valueY, knob, valueH);
-    }
+        int startCol = colOffset;
+        for (int i = 0; i < count; ++i)
+        {
+            const int col = startCol + i;
+            const int x0 = strip.getX() + (int)std::round(unitW * col) + groupGap * gi;
+            const int colCenter = x0 + (int)std::round(unitW * 0.5f);
+            const int x = colCenter - effectiveKnob / 2;
 
+            auto& it = items[idxList[i]];
+            it.L->setBounds(x, labelY, effectiveKnob, labelHeight);
+            it.S->setBounds(x, knobY,  effectiveKnob, effectiveKnob);
+            it.V->setBounds(x, valueY, effectiveKnob, valueHeight);
+        }
+    };
+
+    int col = 0;
+    placeGroup(oscIdx,  (int)std::size(oscIdx),  0, col); col += (int)std::size(oscIdx);
+    placeGroup(filtIdx, (int)std::size(filtIdx), 1, col); col += (int)std::size(filtIdx);
+    placeGroup(adsrIdx, (int)std::size(adsrIdx), 2, col); col += (int)std::size(adsrIdx);
+    placeGroup(fxIdx,   (int)std::size(fxIdx),   3, col); col += (int)std::size(fxIdx);
+
+    // Keyboard & scope
     int kbH = std::max(keyboardMinHeight, area.getHeight() / 5);
     auto kbArea = area.removeFromBottom(kbH);
     keyboardComponent.setBounds(kbArea);
@@ -640,6 +678,7 @@ void MainComponent::resized()
 
     scopeRect = area.reduced(8, 8);
 }
+
 
 void MainComponent::initialiseUi()
 {
@@ -950,7 +989,6 @@ void MainComponent::initialiseToggle()
     audioToggle.setColour(juce::TextButton::buttonOnColourId, Theme::accentDim.withAlpha(0.8f));
     audioToggle.setColour(juce::TextButton::textColourOnId, Theme::accent);
     audioToggle.setColour(juce::TextButton::textColourOffId, Theme::textPrimary);
-    audioToggle.setBorderSize(juce::BorderSize<int>(0));
     audioToggle.onClick = [this]
     {
         audioEnabled = audioToggle.getToggleState();
@@ -982,7 +1020,7 @@ void MainComponent::initialiseKeyboard()
     keyboardComponent.setMidiChannel(1);
     keyboardComponent.setAvailableRange(0, 127);
 
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::backgroundColourId, Theme::panelColour.darker(0.3f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::upDownButtonBackgroundColourId, Theme::panelColour.darker(0.3f));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, Theme::panelColour.brighter(0.1f));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, Theme::backgroundBottom.brighter(0.15f));
     keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, Theme::accentDim.withAlpha(0.4f));
@@ -1008,7 +1046,7 @@ void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String
 {
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centred);
-    label.setFont(juce::Font(12.0f, juce::Font::bold));
+    label.setFont(juce::FontOptions(12.0f).withStyle("Bold"));
     label.setColour(juce::Label::textColourId, Theme::textSecondary);
     addAndMakeVisible(label);
 }
@@ -1016,7 +1054,7 @@ void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String
 void MainComponent::configureValueLabel(juce::Label& label)
 {
     label.setJustificationType(juce::Justification::centred);
-    label.setFont(juce::Font(13.0f, juce::Font::plain));
+    label.setFont(juce::FontOptions(13.0f).withStyle("Regular"));
     label.setColour(juce::Label::textColourId, Theme::textPrimary);
     addAndMakeVisible(label);
 }
