@@ -13,8 +13,27 @@ namespace
     constexpr int audioButtonHeight = 28;
     constexpr int controlStripHeight = 110;
     constexpr int knobSize = 48;
+    constexpr int totalControlKnobs = 21;
     constexpr int keyboardMinHeight = 60;
     constexpr int scopeTimerHz = 60;
+
+    namespace Theme
+    {
+        const juce::Colour backgroundTop    = juce::Colour::fromRGB(6, 10, 16);
+        const juce::Colour backgroundBottom = juce::Colour::fromRGB(3, 4, 7);
+        const juce::Colour panelColour      = juce::Colour::fromRGB(18, 26, 36).withAlpha(0.8f);
+        const juce::Colour panelOutline     = juce::Colour::fromFloatRGBA(0.24f, 0.86f, 0.89f, 0.4f);
+        const juce::Colour accent           = juce::Colour::fromRGB(40, 255, 220);
+        const juce::Colour accentDim        = accent.withMultipliedAlpha(0.35f);
+        const juce::Colour textPrimary      = juce::Colour::fromRGB(190, 220, 220);
+        const juce::Colour textSecondary    = juce::Colour::fromRGB(120, 180, 180);
+        const juce::Colour gridMajor        = juce::Colour::fromFloatRGBA(0.1f, 0.8f, 0.75f, 0.15f);
+        const juce::Colour gridMinor        = juce::Colour::fromFloatRGBA(0.08f, 0.45f, 0.52f, 0.08f);
+        const juce::Colour scopeGlow        = juce::Colour::fromFloatRGBA(0.18f, 1.0f, 0.92f, 0.35f);
+        const juce::Colour scopeTrace       = juce::Colour::fromFloatRGBA(0.45f, 1.0f, 0.98f, 0.95f);
+        const juce::Colour glitchColour     = juce::Colour::fromFloatRGBA(0.9f, 0.2f, 1.0f, 0.4f);
+        const juce::Colour scanColour       = juce::Colour::fromFloatRGBA(0.3f, 1.0f, 0.85f, 0.22f);
+    }
 }
 
 //==============================================================================
@@ -22,6 +41,8 @@ MainComponent::MainComponent()
 {
     setSize(defaultWidth, defaultHeight);
     setAudioChannels(0, 2);
+
+    visualRandom.setSeedRandomly();
 
     scopeBuffer.clear();
 
@@ -384,36 +405,170 @@ int MainComponent::findZeroCrossingIndex(int searchSpan) const
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(juce::Colours::black);
+    auto bounds = getLocalBounds().toFloat();
 
-    auto drawRect = scopeRect.isEmpty() ? getLocalBounds().reduced(24) : scopeRect;
+    juce::ColourGradient backgroundGradient(Theme::backgroundTop, 0.0f, 0.0f,
+        Theme::backgroundBottom, 0.0f, bounds.getBottom(), false);
+    g.setGradientFill(backgroundGradient);
+    g.fillRect(bounds);
 
-    g.setColour(juce::Colours::white.withAlpha(0.08f));
-    g.drawRoundedRectangle(drawRect.toFloat(), 8.0f, 1.0f);
+    juce::Rectangle<float> glow(bounds.getCentreX() - bounds.getWidth() * 0.35f,
+        bounds.getCentreY() - bounds.getHeight() * 0.45f,
+        bounds.getWidth() * 0.7f,
+        bounds.getHeight() * 0.9f);
+    g.setColour(Theme::accentDim.withAlpha(0.08f));
+    g.fillEllipse(glow);
 
-    g.setColour(juce::Colours::white);
-    juce::Path p;
-
-    const int start = findZeroCrossingIndex(scopeBuffer.getNumSamples() / 2);
-    const int W = drawRect.getWidth();
-    const int N = scopeBuffer.getNumSamples();
-    const float H = (float)drawRect.getHeight();
-    const float Y0 = (float)drawRect.getY();
-    const int X0 = drawRect.getX();
-
-    for (int x = 0; x < W; ++x)
+    auto drawPanel = [&g](const juce::Rectangle<int>& r)
     {
-        const int i = (start + x) % N;
-        const float s = scopeBuffer.getSample(0, i);
-        const float y = juce::jmap(s, -1.0f, 1.0f, Y0 + H, Y0);
-        if (x == 0) p.startNewSubPath((float)X0, y);
-        else p.lineTo((float)(X0 + x), y);
+        if (r.isEmpty())
+            return;
+
+        auto rf = r.toFloat();
+        g.setColour(Theme::panelColour);
+        g.fillRoundedRectangle(rf, 10.0f);
+        g.setColour(Theme::panelOutline);
+        g.drawRoundedRectangle(rf, 10.0f, 1.3f);
+    };
+
+    drawPanel(headerRect);
+    drawPanel(controlStripRect);
+    drawPanel(keyboardRect);
+
+    if (!headerRect.isEmpty())
+    {
+        auto headerTextBounds = headerRect.reduced(18, 6);
+        auto statusArea = headerTextBounds.removeFromRight(audioToggle.getWidth() + 24);
+
+        g.setColour(Theme::textSecondary.withAlpha(0.9f));
+        g.setFont(juce::Font(17.0f, juce::Font::bold));
+        g.drawFittedText("SPECTRAL LAB", headerTextBounds, juce::Justification::left, 1);
+
+        g.setColour(audioEnabled ? Theme::accent : Theme::glitchColour.withAlpha(0.7f));
+        g.setFont(juce::Font(13.0f, juce::Font::plain));
+        g.drawFittedText(audioEnabled ? "AUDIO: ONLINE" : "AUDIO: STANDBY", statusArea, juce::Justification::centredRight, 1);
     }
-    g.strokePath(p, juce::PathStrokeType(2.f));
+
+    if (!controlStripRect.isEmpty())
+    {
+        auto ctrlBounds = controlStripRect.toFloat().reduced(6.0f, 6.0f);
+        g.setColour(Theme::gridMinor.withAlpha(0.35f));
+        g.drawRoundedRectangle(ctrlBounds, 12.0f, 1.0f);
+
+        g.setColour(Theme::gridMinor.withAlpha(0.22f));
+        const float colWidth = (float)controlStripRect.getWidth() / (float)totalControlKnobs;
+        for (int i = 1; i < totalControlKnobs; ++i)
+        {
+            float x = (float)controlStripRect.getX() + colWidth * (float)i;
+            g.drawLine(x, (float)controlStripRect.getY() + 8.0f, x, (float)controlStripRect.getBottom() - 8.0f, 0.5f);
+        }
+    }
+
+    if (!keyboardRect.isEmpty())
+    {
+        auto kbBounds = keyboardRect.toFloat().reduced(4.0f);
+        g.setColour(Theme::gridMinor.withAlpha(0.3f));
+        g.drawRoundedRectangle(kbBounds, 10.0f, 1.0f);
+    }
+
+    if (scopeRect.isEmpty())
+        return;
+
+    auto scopeBounds = scopeRect.toFloat();
+    auto scopeInner = scopeBounds.reduced(10.0f, 12.0f);
+
+    g.setColour(Theme::panelColour.withAlpha(0.95f));
+    g.fillRoundedRectangle(scopeBounds, 16.0f);
+    g.setColour(Theme::panelOutline.brighter(0.2f));
+    g.drawRoundedRectangle(scopeBounds, 16.0f, 1.6f);
+
+    {
+        juce::Graphics::ScopedSaveState state(g);
+        g.reduceClipRegion(scopeInner.toNearestInt());
+
+        const int majorSpacing = 64;
+        const int minorSpacing = 16;
+
+        for (int x = (int)scopeInner.getX(); x < scopeInner.getRight(); x += minorSpacing)
+        {
+            const bool isMajor = ((x - (int)scopeInner.getX()) % majorSpacing) == 0;
+            g.setColour(isMajor ? Theme::gridMajor : Theme::gridMinor);
+            g.drawLine((float)x, scopeInner.getY(), (float)x, scopeInner.getBottom(), 1.0f);
+        }
+
+        for (int y = (int)scopeInner.getY(); y < scopeInner.getBottom(); y += minorSpacing)
+        {
+            const bool isMajor = ((y - (int)scopeInner.getY()) % majorSpacing) == 0;
+            g.setColour(isMajor ? Theme::gridMajor : Theme::gridMinor);
+            g.drawLine(scopeInner.getX(), (float)y, scopeInner.getRight(), (float)y, 1.0f);
+        }
+
+        juce::Path waveformPath;
+        juce::Path glowPath;
+        juce::Path glitchBursts;
+
+        const int start = findZeroCrossingIndex(scopeBuffer.getNumSamples() / 2);
+        const int W = (int)scopeInner.getWidth();
+        const int N = scopeBuffer.getNumSamples();
+        const float H = scopeInner.getHeight();
+        const float Y0 = scopeInner.getY();
+        const float X0 = scopeInner.getX();
+        const float glitchMagnitude = juce::jmap(glitchProbability, 0.0f, 1.0f, 0.0025f, 0.08f);
+
+        for (int x = 0; x < W; ++x)
+        {
+            const int i = (start + x) % N;
+            const float sample = scopeBuffer.getSample(0, i);
+            const float jitter = (visualRandom.nextFloat() - 0.5f) * glitchMagnitude;
+            const float y = juce::jlimit(scopeInner.getY(), scopeInner.getBottom(),
+                juce::jmap(sample + jitter, -1.0f, 1.0f, Y0 + H, Y0));
+            const float px = X0 + (float)x;
+
+            if (x == 0)
+            {
+                waveformPath.startNewSubPath(px, y);
+                glowPath.startNewSubPath(px, y);
+            }
+            else
+            {
+                waveformPath.lineTo(px, y);
+                glowPath.lineTo(px, y);
+            }
+
+            if (visualRandom.nextFloat() < juce::jlimit(0.025f, 0.22f, glitchProbability * 0.25f + 0.02f))
+            {
+                const float burstHeight = juce::jmap(visualRandom.nextFloat(), 0.0f, 1.0f, H * 0.04f, H * 0.18f);
+                const float burstY = juce::jlimit(scopeInner.getY(), scopeInner.getBottom() - burstHeight, y - burstHeight * 0.5f);
+                glitchBursts.addRectangle(px - 1.0f, burstY, 2.0f + visualRandom.nextFloat() * 3.0f, burstHeight);
+            }
+        }
+
+        g.setColour(Theme::scopeGlow);
+        g.strokePath(glowPath, juce::PathStrokeType(6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour(Theme::scopeTrace);
+        g.strokePath(waveformPath, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const float glitchAlpha = juce::jmap(glitchProbability, 0.0f, 1.0f, 0.18f, 0.65f);
+        g.setColour(Theme::glitchColour.withAlpha(glitchAlpha));
+        g.fillPath(glitchBursts);
+
+        const float scanX = scopeInner.getX() + scopeInner.getWidth() * juce::jlimit(0.0f, 1.0f, scanProgress);
+        juce::Rectangle<float> scanRect(scanX - 3.0f, scopeInner.getY(), 6.0f, scopeInner.getHeight());
+        juce::ColourGradient scanGradient(Theme::scanColour.withAlpha(0.0f), scanRect.getX(), scanRect.getY(),
+            Theme::scanColour, scanRect.getCentreX(), scanRect.getY(), false);
+        g.setGradientFill(scanGradient);
+        g.fillRect(scanRect);
+    }
 }
 
 void MainComponent::timerCallback()
 {
+    const float speed = juce::jmap(glitchProbability, 0.0f, 1.0f, 0.006f, 0.03f);
+    scanProgress += speed;
+    while (scanProgress > 1.0f)
+        scanProgress -= 1.0f;
+
     repaint();
 }
 
@@ -427,11 +582,13 @@ void MainComponent::resized()
     auto area = getLocalBounds().reduced(headerMargin);
 
     auto bar = area.removeFromTop(headerBarHeight);
+    headerRect = bar;
     audioToggle.setBounds(bar.getRight() - audioButtonWidth, bar.getY() + 4, audioButtonWidth, audioButtonHeight);
 
     auto strip = area.removeFromTop(controlStripHeight);
+    controlStripRect = strip;
     const int knob = knobSize;
-    const int numKnobs = 21;
+    const int numKnobs = totalControlKnobs;
     const int colWidth = strip.getWidth() / numKnobs;
 
     struct Item { juce::Label* L; juce::Slider* S; juce::Label* V; };
@@ -476,6 +633,7 @@ void MainComponent::resized()
     int kbH = std::max(keyboardMinHeight, area.getHeight() / 5);
     auto kbArea = area.removeFromBottom(kbH);
     keyboardComponent.setBounds(kbArea);
+    keyboardRect = kbArea;
 
     float keyW = juce::jlimit(16.0f, 40.0f, kbArea.getWidth() / 20.0f);
     keyboardComponent.setKeyWidth(keyW);
@@ -788,6 +946,11 @@ void MainComponent::initialiseToggle()
 {
     audioToggle.setClickingTogglesState(true);
     audioToggle.setToggleState(true, juce::dontSendNotification);
+    audioToggle.setColour(juce::TextButton::buttonColourId, Theme::panelColour.withAlpha(0.9f));
+    audioToggle.setColour(juce::TextButton::buttonOnColourId, Theme::accentDim.withAlpha(0.8f));
+    audioToggle.setColour(juce::TextButton::textColourOnId, Theme::accent);
+    audioToggle.setColour(juce::TextButton::textColourOffId, Theme::textPrimary);
+    audioToggle.setBorderSize(juce::BorderSize<int>(0));
     audioToggle.onClick = [this]
     {
         audioEnabled = audioToggle.getToggleState();
@@ -819,11 +982,13 @@ void MainComponent::initialiseKeyboard()
     keyboardComponent.setMidiChannel(1);
     keyboardComponent.setAvailableRange(0, 127);
 
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xFF2A2A2A));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xFF0E0E0E));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colours::black.withAlpha(0.6f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colours::white.withAlpha(0.08f));
-    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, juce::Colours::white.withAlpha(0.12f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::backgroundColourId, Theme::panelColour.darker(0.3f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, Theme::panelColour.brighter(0.1f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::blackNoteColourId, Theme::backgroundBottom.brighter(0.15f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, Theme::accentDim.withAlpha(0.4f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::textLabelColourId, Theme::textSecondary.withAlpha(0.8f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, Theme::accentDim.withAlpha(0.2f));
+    keyboardComponent.setColour(juce::MidiKeyboardComponent::keyDownOverlayColourId, Theme::accentDim.withAlpha(0.45f));
 }
 
 void MainComponent::configureRotarySlider(juce::Slider& slider)
@@ -832,20 +997,27 @@ void MainComponent::configureRotarySlider(juce::Slider& slider)
     slider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     slider.setRotaryParameters(juce::MathConstants<float>::pi * 1.2f,
         juce::MathConstants<float>::pi * 2.8f, true);
+    slider.setColour(juce::Slider::rotarySliderFillColourId, Theme::accent);
+    slider.setColour(juce::Slider::rotarySliderOutlineColourId, Theme::accentDim);
+    slider.setColour(juce::Slider::thumbColourId, Theme::accent);
+    slider.setColour(juce::Slider::trackColourId, Theme::accentDim);
+    slider.setColour(juce::Slider::backgroundColourId, Theme::panelColour.withAlpha(0.4f));
 }
 
 void MainComponent::configureCaptionLabel(juce::Label& label, const juce::String& text)
 {
     label.setText(text, juce::dontSendNotification);
     label.setJustificationType(juce::Justification::centred);
-    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    label.setFont(juce::Font(12.0f, juce::Font::bold));
+    label.setColour(juce::Label::textColourId, Theme::textSecondary);
     addAndMakeVisible(label);
 }
 
 void MainComponent::configureValueLabel(juce::Label& label)
 {
     label.setJustificationType(juce::Justification::centred);
-    label.setColour(juce::Label::textColourId, juce::Colours::white);
+    label.setFont(juce::Font(13.0f, juce::Font::plain));
+    label.setColour(juce::Label::textColourId, Theme::textPrimary);
     addAndMakeVisible(label);
 }
 
