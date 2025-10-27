@@ -1,7 +1,5 @@
 #pragma once
 #include <JuceHeader.h>
-#include <array>
-#include <vector>
 
 class FuturisticLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -13,6 +11,7 @@ public:
         juce::Slider&) override;
 
     juce::Font getLabelFont(juce::Label&) override;
+    void drawLabel(juce::Graphics&, juce::Label&) override;
 };
 
 class MainComponent : public juce::AudioAppComponent,
@@ -153,7 +152,6 @@ private:
 
     // Scope area cache (so paint knows where to draw when keyboard steals space)
     juce::Rectangle<int> scopeRect;
-    juce::Rectangle<int> waterfallRect;
     juce::Rectangle<float> controlStripBounds;
     juce::Rectangle<float> keyboardBounds;
 
@@ -167,10 +165,9 @@ private:
     void configureCaptionLabel(juce::Label& label, const juce::String& text);
     void configureValueLabel(juce::Label& label);
     void updateAmplitudeEnvelope();
-    void updateVisuals();
-    void initialiseParticles();
-    void updateParticles();
     void updateKeyboardHighlight(float velocity);
+    void drawBackground(juce::Graphics& g, juce::Rectangle<float> bounds);
+    void drawScope(juce::Graphics& g, juce::Rectangle<float> scopeArea, juce::Colour traceColour);
 
     void resetSmoothers(double sampleRate);
     void setTargetFrequency(float newFrequency, bool force = false);
@@ -193,26 +190,7 @@ private:
 
     FuturisticLookAndFeel lookAndFeel;
 
-    std::array<float, 64> energyBands {};
-    std::array<float, 256> radialHistory {};
-    juce::Image waterfallImage;
-
-    struct Particle
-    {
-        juce::Point<float> centre;
-        float baseRadius = 1.0f;
-        float orbitRadius = 1.0f;
-        float angle = 0.0f;
-        float baseSpeed = 0.5f;
-        float speed = 0.5f;
-        float baseSize = 4.0f;
-        float size = 4.0f;
-        juce::Colour colour { juce::Colours::white };
-    };
-
-    std::vector<Particle> particles;
-    juce::Random visualRandom;
-    juce::Colour scopeNeonColour { juce::Colour::fromRGB(60, 200, 255) };
+    juce::Colour scopeBaseColour { juce::Colour::fromRGB(70, 200, 255) };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
 };
