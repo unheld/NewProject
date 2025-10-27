@@ -654,7 +654,6 @@ void MainComponent::timerCallback()
     repaint();
 }
 
-// ✅ FINAL DEFINITIVE FIX FOR ALL JUCE VERSIONS ✅
 void MainComponent::resized()
 {
     // Enforce survival layout — prevents overlap
